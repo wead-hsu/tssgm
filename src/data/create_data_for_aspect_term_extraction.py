@@ -4,10 +4,13 @@ from collections import Counter
 import xml.etree.ElementTree as ET
 import pickle as pkl
 import sys, os
+import numpy as np
+import codecs 
 
 def create_data_for_aspect_term_extraction(train_fn, test_fn, save_dir,
         vocab_size=50000):
     train_data = ET.parse(train_fn).getroot()
+    test_data = ET.parse(test_fn).getroot()
 
     def get_spans(txt, tokens):
         offset = 0
@@ -22,7 +25,7 @@ def create_data_for_aspect_term_extraction(train_fn, test_fn, save_dir,
         raw_text = sentence.find('text').text.lower()
         opinions = sentence.find('Opinions')
         if opinions is None:
-            return (wt(raw_text), [0]*len(wt(raw_text)))
+            return (wt(raw_text), ['O']*len(wt(raw_text)))
 
         # make sure the target words will be separated by inserting spaces
         text_for_tokenization = raw_text[:].replace('/', ' / ')
@@ -33,7 +36,7 @@ def create_data_for_aspect_term_extraction(train_fn, test_fn, save_dir,
         tokens = wt(text_for_tokenization)
         spans = get_spans(raw_text, tokens)
         char_idx_to_word_idx = {s[1]: idx for idx, s in enumerate(spans)} # map origin index to the tokenized words
-        tags = [0] * len(spans)
+        tags = ['O'] * len(spans)
         #print(char_idx_to_word_idx)
 
         if opinions is not None:
@@ -44,44 +47,71 @@ def create_data_for_aspect_term_extraction(train_fn, test_fn, save_dir,
                 eidx = int(opinion.attrib['to'])
                 if sidx == eidx == 0:
                     continue
-                token_sidx, token_edix = 1000, 0
+                token_sidx, token_eidx = 1000, 0
+                tag = 'B'
                 for idx in range(sidx, eidx):
                     if idx in char_idx_to_word_idx:
-                        tags[char_idx_to_word_idx[idx]] = 1
+                        token_sidx = min(token_sidx, char_idx_to_word_idx[idx])
+                        token_eidx = max(token_eidx, char_idx_to_word_idx[idx])
+                        tags[char_idx_to_word_idx[idx]] = 'B'
+                for idx in range(token_sidx, token_eidx + 1):
+                    tags[idx] = tag
+                    tag = 'I'
                 if sidx not in char_idx_to_word_idx:
                     print('warning', tokens, text_for_tokenization, sidx, spans, zip([s[0] for s in spans], tags))
                     #raise Exception('warning', tokens, text_for_tokenization, sidx, spans, zip([s[0] for s in spans], tags))
 
         return (tokens, tags)
 
-    data_samples = []
-    words_cnt = Counter()
+    train_samples = []
+    #words_cnt = Counter()
     for review in train_data:
         for sentences in review:
             for sentence in sentences:
                 data_sample = proc_sentence(sentence)
-                data_samples.append(data_sample)
-                words_cnt.update(data_sample[0])
+                train_samples.append(data_sample)
+                #words_cnt.update(data_sample[0])
                 #words_cnt.update(wt(sentence.find('text').text.lower()))
-    vocab = words_cnt.most_common(50000)
-    vocab = {w[0]:idx+2 for idx, w in enumerate(vocab)}
-    vocab['EOS'] = 0
-    vocab['UNK'] = 1
+    #vocab = words_cnt.most_common(50000)
+    #vocab = {w[0]:idx+2 for idx, w in enumerate(vocab)}
+    #vocab['EOS'] = 0
+    #vocab['UNK'] = 1
+    random_index = np.random.permutation(len(train_samples))
+    dev_samples = train_samples[:200]
+    train_samples = train_samples[200:]
+
+    test_samples = []
+    for review in train_data:
+        for sentences in review:
+            for sentence in sentences:
+                data_sample = proc_sentence(sentence)
+                test_samples.append(data_sample)
     
-    x = [[vocab[w] for w in sample[0]] for sample in data_samples]
-    y = [sample[1] for sample in data_samples]
+    print('number of train samples:', len(train_samples))
+    print('number of dev samples:', len(dev_samples))
+    print('number of test samples:', len(test_samples))
+    #x = [[vocab[w] for w in sample[0]] for sample in train_samples]
+    #y = [sample[1] for sample in train_samples]
     
-    data = {'x': x,
-            'y': y,
-            'vocab': vocab,
-            }
-    
-    data_fn = os.path.join(save_dir, 'data.pkl')
-    if os.path.exists(data_fn):
-        print('data already exists')
-    else:
-        pkl.dump(data, open(data_fn, 'w'))
-        print('data saved')
+    def save_data(data, fn):
+        data_fn = os.path.join(save_dir, fn)
+        if os.path.exists(data_fn):
+            print('data already exists')
+        else:
+            #pkl.dump(data, open(data_fn, 'w'))
+            with codecs.open(data_fn, 'w', encoding='utf-8') as f:
+                for sample in data:
+                    for i in range(len(sample[0])):
+                        f.write(sample[0][i])
+                        f.write(' ')
+                        f.write(sample[1][i])
+                        f.write('\n')
+                    f.write('\n')
+            print('data saved')
+
+    save_data(train_samples, 'train.seqtag.bio')
+    save_data(dev_samples, 'dev.seqtag.bio')
+    save_data(test_samples, 'test.seqtag.bio')
 
 
 create_data_for_aspect_term_extraction('../../data/se2016task5/raw/subtask1/rest_en/ABSA16_Restaurants_Train_SB1_v2.xml',
