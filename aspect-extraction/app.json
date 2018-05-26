@@ -1,0 +1,31 @@
+{
+  "CONFIG" : {
+    "PASSWORD" : "__password__",
+    "ARMOR" : "10.150.226.6:8020",
+    "ARMOR_CLIENT_HOME" : "/home/lvshan.jt/armor/armor-client/",
+    "MODEL_PATH" : "/gruntdata/DL_dataset/weidi.xwd/model/",
+    "USER" : "weidi.xwd"
+  },
+  "TRAIN" : {
+    "TENSORFLOW" : {
+      "GPU_PER_CONTAINER" : "0",
+      "MEM_PER_PS" : "0GB",
+      "PYTHON_PATH" : "ls -all && env && ~/anaconda2/bin/python",
+      "MODE" : "share",
+      "APP_NAME" : "yelp_aspect_term_by_bilstmcrf_trained_on_se16task5restsb1",
+      "CPU_PER_CONTAINER" : "20",
+      "PRIORITY" : "NORMAL",
+      "PS_NUM" : "0",
+      "QUEUE" : "default",
+      "DEPLOY_TAG" : "gpu",
+      "WORKER_NUM" : "1",
+      "MEM_PER_CONTAINER" : "20GB",
+      "IMAGE" : "acs-reg.alipay.com/ai/cuda8u0-cudnn6u0-tensorflow:aliv1.1.0-keras.2.0.6.nfs-tools",
+      "SCRIPT" : "./get_output_for_file.py",
+      "GPU_PER_PS" : "0",
+      "CPU_PER_PS" : "0",
+      "GPU_MEM_PER_PS" : "0KB",
+      "GPU_MEM_PER_GPU" : "6GB"
+    }
+  }
+}
