@@ -26,7 +26,7 @@ class SemiClassifier(ModelBase):
     def _get_rnn_cell(self, rnn_type, num_units, num_layers):
         if rnn_type == 'LSTM':
             # use concated state for convinience
-            cell = tf.contrib.rnn.LSTMCell(num_units, state_is_tuple=True)
+            cell = tf.contrib.rnn.LSTMCell(num_units, state_is_tuple=True, cell_clip=10)
         elif rnn_type == 'GRU':
             cell = tf.contrib.rnn.GRUCell(num_units)
         else:

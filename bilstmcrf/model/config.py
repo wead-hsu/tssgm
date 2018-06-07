@@ -68,7 +68,7 @@ class Config():
     filename_glove = "data/glove.6B/glove.6B.{}d.txt".format(dim_word)
     # trimmed embeddings (created from glove_filename with build_data.py)
     filename_trimmed = "data/glove.6B.{}d.trimmed.npz".format(dim_word)
-    use_pretrained = True
+    use_pretrained = False
 
     # dataset
     # filename_dev = "data/coNLL/eng/eng.testa.iob"
@@ -105,4 +105,4 @@ class Config():
 
     # NOTE: if both chars and crf, only 1.6x slower on GPU
     use_crf = True # if crf, training is 1.7x slower on CPU
-    use_chars = True # if char embedding, training is 3.5x slower on CPU
+    use_chars = False # if char embedding, training is 3.5x slower on CPU

@@ -146,7 +146,7 @@ class SemiClassifier(ModelBase):
                 #emb_inp = tf.nn.dropout(emb_inp, self.keep_rate_plh)
                 emb_inp = tf.concat([emb_inp, tf.tile(label_oh[:, None, :], [1, tf.shape(emb_inp)[1], 1])], axis=2)
 
-                cell = self._get_rnn_cell(args.rnn_type, args.num_units, args.num_layers)
+                cell = self._get_rnn_cell(args.rnn_type, args.num_units, args.num_layers, args.grad_clip)
 
                 dec_outs, _ = tf.nn.dynamic_rnn(
                         cell=cell,
@@ -470,11 +470,11 @@ class SemiClassifier(ModelBase):
         return self.loss_sum_u + self.entropy_u
 
     def _create_klw(self, args):
-        kl_w = tf.log(1. + tf.exp((self.global_step - args.klw_b) * args.klw_w))
+        kl_w = 1. / (1. + tf.exp(-(self.global_step - args.klw_b) * args.klw_w))
         #kl_w = tf.minimum(kl_w, 1.) / 100.0 #scale reweighted
         # 0 if it is less than 3200 batches
         kl_w_mask = tf.to_float(tf.greater(self.global_step, 3200))
-        self.kl_w =  kl_w_mask * kl_w * (1 - kl_w_mask) * 0
+        self.kl_w =  kl_w_mask * kl_w + (1 - kl_w_mask) * 0
 
     def model_setup(self, args):
         with tf.variable_scope(args.log_prefix):
