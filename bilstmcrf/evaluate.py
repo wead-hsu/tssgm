@@ -32,8 +32,6 @@ def align_data(data):
 
     return data_aligned
 
-
-
 def interactive_shell(model):
     """Creates interactive shell to play with model
 
@@ -75,6 +73,8 @@ def main():
     model = NERModel(config)
     model.build()
     #model.restore_session(config.dir_model)
+    #model.saver.restore(model.sess, './results/test/model.weights/-0')
+    model.restore_session('./results/test/model.weights/-0')
     #model_file = tf.train.latest_checkpoint("./results/test/model.weights")
     #print(model_file)
     print(config.vocab_tags)
