@@ -393,7 +393,7 @@ class SemiClassifier(ModelBase):
             surrogate_loss = y_st.loss(routing_loss)
             self.entropy_u = tf.losses.softmax_cross_entropy(self.predict_u, self.predict_u)
 
-        return tf.reduce_mean(surrogate_loss) + tf.reduce_mean(loss_u_of_gen) + self.entropy_u
+        return tf.reduce_mean(surrogate_loss) + tf.reduce_mean(loss_u_of_gen) - self.entropy_u
     
     def get_loss_u(self, args):
         self._logger.info('Reweighting approach is not valid without sampling')
@@ -423,7 +423,7 @@ class SemiClassifier(ModelBase):
 
             self.loss_sum_u = tf.add_n([self.loss_sum_u[idx] * self.predict_u[:, idx] for idx in range(args.num_classes)]) # [bs]
             self.loss_sum_u = tf.reduce_mean(self.loss_sum_u)
-        return self.loss_sum_u + self.entropy_u
+        return self.loss_sum_u - self.entropy_u
 
     def model_setup(self, args):
         with tf.variable_scope(args.log_prefix):
