@@ -9,7 +9,7 @@ CUDA_VISIBLE_DEVICES=cpu0 python3 semiclf.py \
 	--test_path ${save_dir}/test.data.idx \
 	--vocab_path ${save_dir}/vocab.pkl \
 	--embd_path ${save_dir}/embd.pkl \
-	--save_dir 'results/ag/semiclf-ag8k-lstm-nosample-emb-dropoutfix-cellclipeverywhere' \
+	--save_dir 'results/ag/semiclf-ag8k-lstm-nosample-emb-dropoutfix-cellclipeverywhere-hfix-nodivideklw' \
 	--num_classes 4 \
 	--num_pretrain_steps 0000 \
 	--vocab_size 23829 \

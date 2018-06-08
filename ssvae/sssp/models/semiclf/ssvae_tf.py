@@ -4,9 +4,9 @@ from __future__ import print_function
 import tensorflow as tf
 from tensorflow.contrib.layers.python.layers.utils import smart_cond
 from tensorflow.core.protobuf import saver_pb2
-from tensorflow.contrib.bayesflow import stochastic_tensor as st
-from tensorflow.contrib.bayesflow import stochastic_graph as sg
-from tensorflow.contrib.bayesflow import stochastic_gradient_estimators as sge
+#from tensorflow.contrib.bayesflow import stochastic_tensor as st
+#from tensorflow.contrib.bayesflow import stochastic_graph as sg
+#from tensorflow.contrib.bayesflow import stochastic_gradient_estimators as sge
 #from tensorflow.python.framework import ops
 
 import logging
@@ -291,14 +291,22 @@ class SemiClassifier(ModelBase):
                     scope='logvar_posterior')
             mu_pri = tf.zeros_like(mu_pst)
             logvar_pri = tf.ones_like(logvar_pst)
-            dist_pri = tf.contrib.distributions.Normal(mu=mu_pri, sigma=tf.exp(logvar_pri))
-            dist_pst = tf.contrib.distributions.Normal(mu=mu_pst, sigma=tf.exp(logvar_pst))
-            kl_loss = tf.contrib.distributions.kl(dist_pst, dist_pri)
+            # tf 1.0
+            #dist_pri = tf.contrib.distributions.Normal(mu=mu_pri, sigma=tf.exp(logvar_pri))
+            #dist_pst = tf.contrib.distributions.Normal(mu=mu_pst, sigma=tf.exp(logvar_pst))
+            # tf 1.8
+            dist_pri = tf.contrib.distributions.Normal(loc=mu_pri, scale=tf.exp(logvar_pri))
+            dist_pst = tf.contrib.distributions.Normal(loc=mu_pst, scale=tf.exp(logvar_pst))
+            kl_loss = tf.contrib.distributions.kl_divergence(dist_pst, dist_pri)
             kl_loss = tf.reduce_sum(kl_loss, axis=1)
-
-        with st.value_type(st.SampleValue(stop_gradient=False)):
-            z_st_pri = st.StochasticTensor(dist_pri, name='z_pri')
-            z_st_pst = st.StochasticTensor(dist_pst, name='z_pst')
+            
+            # tf 1.0
+            #with st.value_type(st.SampleValue(stop_gradient=False)):
+            #z_st_pri = st.StochasticTensor(dist_pri, name='z_pri')
+            #z_st_pst = st.StochasticTensor(dist_pst, name='z_pst')
+            # tf 1.8
+            z_st_pri = dist_pri.sample()
+            z_st_pst = dist_pst.sample()
             z = smart_cond(self.is_training_plh, lambda: z_st_pst, lambda: z_st_pri)
        
         z_ext = tf.contrib.layers.fully_connected(tf.reshape(z, [-1, args.dim_z]), args.num_units, tf.tanh, scope='extend_z')
@@ -381,7 +389,7 @@ class SemiClassifier(ModelBase):
             tf.summary.scalar('pred_loss_l', self.predict_loss_l)
             tf.summary.scalar('accuracy_l', self.accuracy_l)
         return self.loss_l
-    
+    '''
     def get_loss_u_sample(self, args):
         with tf.variable_scope(args.log_prefix, reuse=True):
             dec_emb = tf.nn.embedding_lookup(self.embedding_matrix, self.inp_u_plh)
@@ -432,6 +440,7 @@ class SemiClassifier(ModelBase):
             self.entropy_u = tf.losses.softmax_cross_entropy(self.predict_u, self.predict_u)
 
         return tf.reduce_mean(surrogate_loss) + tf.reduce_mean(loss_u_of_gen) - self.entropy_u
+    '''
     
     def get_loss_u(self, args):
         self._logger.info('Reweighting approach is not valid without sampling')

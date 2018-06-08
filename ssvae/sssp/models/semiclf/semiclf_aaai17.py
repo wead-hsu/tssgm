@@ -4,9 +4,9 @@ from __future__ import print_function
 import tensorflow as tf
 from tensorflow.contrib.layers.python.layers.utils import smart_cond
 from tensorflow.core.protobuf import saver_pb2
-from tensorflow.contrib.bayesflow import stochastic_tensor as st
-from tensorflow.contrib.bayesflow import stochastic_graph as sg
-from tensorflow.contrib.bayesflow import stochastic_gradient_estimators as sge
+#from tensorflow.contrib.bayesflow import stochastic_tensor as st
+#from tensorflow.contrib.bayesflow import stochastic_graph as sg
+#from tensorflow.contrib.bayesflow import stochastic_gradient_estimators as sge
 #from tensorflow.python.framework import ops
 
 import logging
@@ -23,10 +23,10 @@ class SemiClassifier(ModelBase):
         super(SemiClassifier, self).__init__()
         self._logger = logging.getLogger(__name__)
 
-    def _get_rnn_cell(self, rnn_type, num_units, num_layers):
+    def _get_rnn_cell(self, rnn_type, num_units, num_layers, cell_clip):
         if rnn_type == 'LSTM':
             # use concated state for convinience
-            cell = tf.contrib.rnn.LSTMCell(num_units, state_is_tuple=True, cell_clip=10)
+            cell = tf.contrib.rnn.LSTMCell(num_units, state_is_tuple=True, cell_clip=cell_clip)
         elif rnn_type == 'GRU':
             cell = tf.contrib.rnn.GRUCell(num_units)
         else:
@@ -108,7 +108,7 @@ class SemiClassifier(ModelBase):
             emb_inp = tf.nn.embedding_lookup(self.embedding_matrix, inp)
             emb_inp = tf.nn.dropout(emb_inp, self.keep_prob_plh)
 
-            cell = self._get_rnn_cell(args.rnn_type, args.num_units, args.num_layers)
+            cell = self._get_rnn_cell(args.rnn_type, args.num_units, args.num_layers, args.grad_clip)
             _, enc_state = tf.nn.dynamic_rnn(
                     cell=cell,
                     inputs=emb_inp,
@@ -129,7 +129,7 @@ class SemiClassifier(ModelBase):
                 emb_inp = tf.nn.embedding_lookup(self.embedding_matrix, inp)
                 emb_inp = tf.nn.dropout(emb_inp, self.keep_prob_plh)
                 y_inp = tf.tile(label_oh[:, None, :], [1, tf.shape(emb_inp)[1], 1])
-                sclstm_layer = ScLSTM(args.embd_dim, args.num_units, args.num_classes)
+                sclstm_layer = ScLSTM(args.embd_dim, args.num_units, args.num_classes, cell_clip=args.cell_clip)
                 _, dec_outs = sclstm_layer.forward(emb_inp, mask, y_inp, return_final=False, initial_state=(init_state, init_state))
                 cell = sclstm_layer._lstm_step
             else:
@@ -138,7 +138,7 @@ class SemiClassifier(ModelBase):
                 emb_inp = tf.concat([emb_inp, tf.tile(label_oh[:, None, :], [1, tf.shape(emb_inp)[1], 1])], axis=2)
                 emb_inp = tf.nn.dropout(emb_inp, self.keep_prob_plh)
 
-                cell = self._get_rnn_cell(args.rnn_type, args.num_units, args.num_layers)
+                cell = self._get_rnn_cell(args.rnn_type, args.num_units, args.num_layers, args.grad_clip)
 
                 dec_outs, _ = tf.nn.dynamic_rnn(
                         cell=cell,
@@ -274,14 +274,21 @@ class SemiClassifier(ModelBase):
                     scope='logvar_posterior')
             mu_pri = tf.zeros_like(mu_pst)
             logvar_pri = tf.ones_like(logvar_pst)
-            dist_pri = tf.contrib.distributions.Normal(mu=mu_pri, sigma=tf.exp(logvar_pri))
-            dist_pst = tf.contrib.distributions.Normal(mu=mu_pst, sigma=tf.exp(logvar_pst))
-            kl_loss = tf.contrib.distributions.kl(dist_pst, dist_pri)
+            # tf 1.0
+            #dist_pri = tf.contrib.distributions.Normal(mu=mu_pri, sigma=tf.exp(logvar_pri))
+            #dist_pst = tf.contrib.distributions.Normal(mu=mu_pst, sigma=tf.exp(logvar_pst))
+            dist_pri = tf.contrib.distributions.Normal(loc=mu_pri, scale=tf.exp(logvar_pri))
+            dist_pst = tf.contrib.distributions.Normal(loc=mu_pst, scale=tf.exp(logvar_pst))
+            kl_loss = tf.contrib.distributions.kl_divergence(dist_pst, dist_pri)
             kl_loss = tf.reduce_sum(kl_loss, axis=1)
-
-        with st.value_type(st.SampleValue(stop_gradient=False)):
-            z_st_pri = st.StochasticTensor(dist_pri, name='z_pri')
-            z_st_pst = st.StochasticTensor(dist_pst, name='z_pst')
+            
+            # tf 1.0
+            #with st.value_type(st.SampleValue(stop_gradient=False)):
+            #z_st_pri = st.StochasticTensor(dist_pri, name='z_pri')
+            #z_st_pst = st.StochasticTensor(dist_pst, name='z_pst')
+            # tf 1.8
+            z_st_pri = dist_pri.sample()
+            z_st_pst = dist_pst.sample()
             z = smart_cond(self.is_training_plh, lambda: z_st_pst, lambda: z_st_pri)
        
         z_ext = tf.contrib.layers.fully_connected(tf.reshape(z, [-1, args.dim_z]), args.num_units, scope='extend_z')
@@ -350,6 +357,7 @@ class SemiClassifier(ModelBase):
             tf.summary.scalar('accuracy_l', self.accuracy_l)
         return self.loss_l
     
+    '''
     def get_loss_u_sample(self, args):
         with tf.variable_scope(args.log_prefix, reuse=True):
             """ unlabel CLASSIFICATION """
@@ -394,6 +402,7 @@ class SemiClassifier(ModelBase):
             self.entropy_u = tf.losses.softmax_cross_entropy(self.predict_u, self.predict_u)
 
         return tf.reduce_mean(surrogate_loss) + tf.reduce_mean(loss_u_of_gen) - self.entropy_u
+    '''
     
     def get_loss_u(self, args):
         self._logger.info('Reweighting approach is not valid without sampling')
@@ -433,7 +442,7 @@ class SemiClassifier(ModelBase):
             self._create_embedding_matrix(args)
 
             self.kl_w = tf.log(1. + tf.exp((self.global_step - args.klw_b) * args.klw_w))
-            self.kl_w = tf.minimum(self.kl_w, 1.) / 100.0 #scale reweighted
+            #self.kl_w = tf.minimum(self.kl_w, 1.) / 100.0 #scale reweighted
         
         self.loss_l = self.get_loss_l(args)
         self.train_unlabel = tf.greater(self.global_step, args.num_pretrain_steps)
