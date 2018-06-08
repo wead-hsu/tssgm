@@ -129,7 +129,7 @@ class SemiClassifier(ModelBase):
                 emb_inp = tf.nn.embedding_lookup(self.embedding_matrix, inp)
                 emb_inp = tf.nn.dropout(emb_inp, self.keep_prob_plh)
                 y_inp = tf.tile(label_oh[:, None, :], [1, tf.shape(emb_inp)[1], 1])
-                sclstm_layer = ScLSTM(args.embd_dim, args.num_units, args.num_classes, cell_clip=args.cell_clip)
+                sclstm_layer = ScLSTM(args.embd_dim, args.num_units, args.num_classes, cell_clip=args.grad_clip)
                 _, dec_outs = sclstm_layer.forward(emb_inp, mask, y_inp, return_final=False, initial_state=(init_state, init_state))
                 cell = sclstm_layer._lstm_step
             else:
