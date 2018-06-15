@@ -1,29 +1,9 @@
-from model.data_utils import CoNLLDataset
+from model.data_utils import pad_sequences, get_chunks
 from model.ner_model import NERModel
-from model.config import Config
-
-from model.data_utils import minibatches, get_chunks
-
-# -*- coding: utf-8 -*
-import os
-#os.system('pip install jieba')
-os.system('cp -r nltk_data/ ~/')
-
+from model.config import Config, input_args
 import tensorflow as tf
 import numpy as np
-#import data_helper
-import math
-import re
-import odps_config
-import env_processor
-import odps_writer_partition
-#import jieba
-import sys
-import itertools
-import multiprocessing
-from nltk.tokenize import word_tokenize as wt
 
-'''
 def align_data(data):
     """Given dict with lists, creates aligned strings
 
@@ -84,125 +64,167 @@ input> I love Paris""")
         for key, seq in to_print.items():
             model.logger.info(seq)
 
+class CoNLLDataset(object):
+    """Class that iterates over CoNLL Dataset
 
-'''
+    __iter__ method yields a tuple (words, tags)
+        words: list of raw words
+        tags: list of raw tags
 
-#print(os.path.exists('results/test/model.weights/-0.data-00000-of-00001'))
-print(os.path.exists('~/nltk_data/tokenizers/'))
-print(os.path.exists('/usr/local/share/nltk_data/'))
-print(os.path.exists('/usr/local/share/nltk_data/tokenizers'))
-print('fsfdsfs')
-config = Config()
+    If processing_word and processing_tag are not None,
+    optional preprocessing is appplied
+
+    Example:
+        ```python
+        data = CoNLLDataset(filename)
+        for sentence, tags in data:
+            pass
+        ```
+
+    """
+    def __init__(self, filename, processing_word=None, processing_tag=None,
+                 max_iter=None):
+        """
+        Args:
+            filename: path to the file
+            processing_words: (optional) function that takes a word as input
+            processing_tags: (optional) function that takes a tag as input
+            max_iter: (optional) max number of sentences to yield
+
+        """
+        self.filename = filename
+        self.processing_word = processing_word
+        self.processing_tag = processing_tag
+        self.max_iter = max_iter
+        self.length = None
 
 
-def data_iterator(block_id, block_num):
-    odps_data_params = odps_config.odps_data_params.copy()
-    #odps_data_params['partition']='dt=20180506'
-    data_count = env_processor.make_env(odps_data_params).count()
-    per_thread_size = data_count / block_num
-    range_start = per_thread_size * block_id
-    range_end = min(per_thread_size * (block_id + 1), data_count)
-    odps_data_params.update({"range_start": range_start, "range_end":range_end})
-    sample_iter = env_processor.make_env(odps_data_params)
+    def __iter__(self):
+        niter = 0
+        with open(self.filename) as f:
+            raw, words, tags = [], [], []
+            for line in f:
+                line = line.strip()
+                if (len(line) == 0 or line.startswith("-DOCSTART-")):
+                    if len(words) != 0:
+                        niter += 1
+                        if self.max_iter is not None and niter > self.max_iter:
+                            break
+                        yield raw, words, tags
+                        raw, words, tags = [], [], []
+                else:
+                    ls = line.split(' ')
+                    word, tag = ls[0],ls[-1]
+                    raw += [word]
+                    if self.processing_word is not None:
+                        word = self.processing_word(word)
+                    if self.processing_tag is not None:
+                        tag = self.processing_tag(tag)
+                    words += [word]
+                    tags += [tag]
 
-    #odps_results_params['partition']='dt=20180506'
 
-    #result_writer = odps_writer_partition.make_writer(odps_results_params)
-    data_size = range_end - range_start
-    #VOCAB_SIZE = word2vector_helpers.load_vocab_size(FLAGS.embedding_dim)
-    #pretrained_word2vec_matrix = word2vector_helpers.load_word2vec_matrix(VOCAB_SIZE, FLAGS.embedding_dim)
-    i = 0
-    pos = 0
-    while pos < data_size:
-        print pos, data_size
-        bs = min(config.batch_size, data_size - pos)
-        sample = list(itertools.islice(sample_iter, pos, pos + bs))
-        #print(bs)
-        #print(type(sample))
-        #print(sample[0])
-        #print(sample[0][0]['comment_txt'])
-        comment = [x[0]['comment_txt'] for x in sample]
-        tokens = [wt(x[0]['comment_txt']) for x in sample]
-        words = [zip(*[config.processing_word(w) for w in x]) for x in tokens]
-        tags = [[config.processing_tag('B') for w in x] for x in tokens]
-        #print(words, tags)
-        #print(model.predict_batch(words))
-        yield words, tags, tokens, comment
-        if len(sample) == 0:
-            print "sample's length is zero"
-            i += 1
-            pos += config.batch_size
-            continue
-        i += 1
-        pos += config.batch_size
+    def __len__(self):
+        """Iterates once over the corpus to set and store length"""
+        if self.length is None:
+            self.length = 0
+            for _ in self:
+                self.length += 1
 
-def main(block_id, block_num):
+        return self.length
+
+
+def minibatches(data, minibatch_size):
+    """
+    Args:
+        data: generator of (sentence, tags) tuples
+        minibatch_size: (int)
+
+    Yields:
+        list of tuples
+
+    """
+    s_batch, x_batch, y_batch = [], [], []
+    for (s, x, y) in data:
+        if len(x_batch) == minibatch_size:
+            yield s_batch, x_batch, y_batch
+            s_batch, x_batch, y_batch = [], [], []
+
+        if type(x[0]) == tuple:
+            x = zip(*x)
+        s_batch += [s]
+        x_batch += [x]
+        y_batch += [y]
+
+    if len(x_batch) != 0:
+        yield s_batch, x_batch, y_batch
+
+def main():
     # create instance of config
-    #config = Config()
+    config = Config()
 
     # build model
     model = NERModel(config)
     model.build()
-    model.saver.restore(model.sess, './results/test/model.weights/-0')
-    model.restore_session('./results/test/model.weights/-0')
-    model_file = tf.train.latest_checkpoint("./results/test/model.weights")
+    model.restore_session(os.path.join(config.dir_model,'-0'))
+    #model.restore_session(config.dir_model)
+    #model.restore_session('./results/rest/model.weights/-0')
+    #model_file = tf.train.latest_checkpoint("./results/rest/model.weights")
+    #print(model_file)
+    print(config.vocab_tags)
 
     # create dataset
-    #test  = CoNLLDataset(config.filename_test, config.processing_word,
-                         #config.processing_tag, config.max_iter)
-    it = data_iterator(block_id, block_num)
+    if input_args.eval_filename is not None:
+        config.filename_test = input_args.eval_filename
+    test  = CoNLLDataset(config.filename_test, config.processing_word,
+                         config.processing_tag, config.max_iter)
 
     # evaluate and interact
     #model.evaluate(test)
     #interactive_shell(model)
+    if input_args.save_filename is not None:
+        save_file = open(input_args.save_filename, 'w')
+    else:
+        save_file = open('/tmp/tmp.txt', 'w')
+    idx_to_word = {config.vocab_words[k]: k for k in config.vocab_words}
+    idx_to_tag  = {config.vocab_tags[k]: k for k in config.vocab_tags}
 
-    idx2word = {config.vocab_words[k]: k for k in config.vocab_words}
-    idx2tag = {config.vocab_tags[k]: k for k in config.vocab_tags}
-
-    odps_results_params = odps_config.odps_results_params.copy()
-    result_writer = odps_writer_partition.make_writer(odps_results_params)
-
-    line_cnt = 0
-    for words, labels, tokens, comments in it:
+    accs = []
+    correct_preds, total_correct, total_preds = 0., 0., 0.
+    for raw, words, labels in minibatches(test, config.batch_size):
         labels_pred, sequence_lengths = model.predict_batch(words)
-        records = []
-        for comment, token, x, lab, lab_pred, length in zip(comments, tokens, words, labels, labels_pred,
-                                         sequence_lengths):
-            line_cnt += 1
-            if line_cnt % 100 == 0:
-                print('block id {}: {}'.format(block_id, line_cnt))
+        
+        if config.use_chars:
+            _, words = zip(*words)
 
-            aspects = []
-            #print(len(x))
+        for lab, lab_pred, length in zip(labels, labels_pred,
+                                         sequence_lengths):
+            lab      = lab[:length]
             lab_pred = lab_pred[:length]
-            #print(x[1], lab, lab_pred)
+            accs    += [a==b for (a, b) in zip(lab, lab_pred)]
+
+            lab_chunks      = set(get_chunks(lab, config.vocab_tags))
+            lab_pred_chunks = set(get_chunks(lab_pred, config.vocab_tags))
+
+            correct_preds += len(lab_chunks & lab_pred_chunks)
+            total_preds   += len(lab_pred_chunks)
+            total_correct += len(lab_chunks)
             
-            idx = 0
-            while idx < length:
-                aspect = []
-                while idx < length and lab_pred[idx] != 2:
-                    #aspect.append(idx2word[x[1][idx]])
-                    aspect.append(token[idx])
-                    #print(token[idx])
-                    idx += 1
-                if len(aspect) != 0:
-                    aspects.append(' '.join(aspect))
-                idx += 1
-            aspects = '\t'.join(aspects)
-            tags = '\t'.join([idx2tag[t] for t in lab_pred])
-            #print(comment,tags,aspects)
-            #print(lab_pred)
-            records.append([comment, tags, aspects])
-        result_writer.write_record(records, block_id)
+        for i in range(len(words)):
+            for j in range(sequence_lengths[i]):
+                save_file.write(raw[i][j])
+                save_file.write(' ')
+                save_file.write(idx_to_tag[labels_pred[i][j]])
+                save_file.write('\n')
+            save_file.write('\n')
+
+    p   = correct_preds / total_preds if correct_preds > 0 else 0
+    r   = correct_preds / total_correct if correct_preds > 0 else 0
+    f1  = 2 * p * r / (p + r) if correct_preds > 0 else 0
+    acc = np.mean(accs)
+
+    print('acc', acc, 'f1', f1)
+
 
 if __name__ == "__main__":
-    cpu_count = multiprocessing.cpu_count()
-    predict_process = []
-    for i in range(cpu_count - 1):
-        p = multiprocessing.Process(target=lambda: main(i, cpu_count - 1))
-        p.start()
-        predict_process.append(p)
-
-    for p in predict_process:
-        p.join()
-
+    main()

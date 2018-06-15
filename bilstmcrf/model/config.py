@@ -1,9 +1,19 @@
-import os
+import os, argparse
 
 
 from .general_utils import get_logger
 from .data_utils import get_trimmed_glove_vectors, load_vocab, \
         get_processing_word
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--train_filename', type=str)
+parser.add_argument('--dev_filename', type=str)
+parser.add_argument('--test_filename', type=str)
+parser.add_argument('--data_dir', type=str)
+parser.add_argument('--save_dir', type=str)
+parser.add_argument('--eval_filename', type=str, help='file to be evaluated')
+parser.add_argument('--save_filename', type=str, help='save evaluated file')
+input_args = parser.parse_args()
 
 
 class Config():
@@ -57,6 +67,10 @@ class Config():
 
     # general config
     dir_output = "./results/test/"
+    if input_args.save_dir is not None:
+        dir_output = input_args.save_dir
+    print(dir_output)
+
     dir_model  = dir_output + "model.weights/"
     path_log   = dir_output + "log.txt"
 
@@ -68,18 +82,30 @@ class Config():
     filename_glove = "data/glove.6B/glove.6B.{}d.txt".format(dim_word)
     # trimmed embeddings (created from glove_filename with build_data.py)
     filename_trimmed = "data/glove.6B.{}d.trimmed.npz".format(dim_word)
-    use_pretrained = False
+    if input_args.data_dir is not None:
+        filename_trimmed = os.path.join(input_args.data_dir, "glove.6B.{}d.trimmed.npz".format(dim_word))
+    print(filename_trimmed)
+    use_pretrained = True
 
     # dataset
     # filename_dev = "data/coNLL/eng/eng.testa.iob"
     # filename_test = "data/coNLL/eng/eng.testb.iob"
     # filename_train = "data/coNLL/eng/eng.train.iob"
-    filename_dev = "/Users/wdxu/workspace/absa/data/se2016task5/proc/aspect_term_extraction/rest_en/dev.seqtag.bo"
-    filename_test = "/Users/wdxu/workspace/absa/data/se2016task5/proc/aspect_term_extraction/rest_en/test.seqtag.bo"
-    filename_train = "/Users/wdxu/workspace/absa/data/se2016task5/proc/aspect_term_extraction/rest_en/train.seqtag.bo"
+    #filename_dev = "/Users/wdxu/workspace/absa/data/se2016task5/proc/aspect_term_extraction/rest_en/dev.seqtag.bo"
+    #filename_test = "/Users/wdxu/workspace/absa/data/se2016task5/proc/aspect_term_extraction/rest_en/test.seqtag.bo"
+    #filename_train = "/Users/wdxu/workspace/absa/data/se2016task5/proc/aspect_term_extraction/rest_en/train.seqtag.bo"
+    filename_train = "/Users/wdxu/workspace/absa/data/se2014task06/bilstmcrf-lapt/train.seqtag.bo"
+    filename_dev = "/Users/wdxu/workspace/absa/data/se2014task06/bilstmcrf-lapt/dev.seqtag.bo"
+    filename_test = "/Users/wdxu/workspace/absa/data/se2014task06/bilstmcrf-lapt/test.seqtag.bo"
     #filename_test = 'data/yelp.bo.10k'
-
     #filename_dev = filename_test = filename_train = "data/test.txt" # test
+    if input_args.train_filename is not None:
+        filename_train = input_args.train_filename
+    if input_args.dev_filename is not None:
+        filename_dev = input_args.dev_filename
+    if input_args.test_filename is not None:
+        filename_test = input_args.test_filename
+    print(filename_train, filename_dev, filename_test)
 
     max_iter = None # if not None, max number of examples in Dataset
 
@@ -87,12 +113,17 @@ class Config():
     filename_words = "data/words.txt"
     filename_tags = "data/tags.txt"
     filename_chars = "data/chars.txt"
+    if input_args.data_dir is not None:
+        filename_words = os.path.join(input_args.data_dir, 'words.txt')
+        filename_tags  = os.path.join(input_args.data_dir, 'tags.txt')
+        filename_chars = os.path.join(input_args.data_dir, 'chars.txt')
+    print(filename_words, filename_tags, filename_chars)
 
     # training
     train_embeddings = False
     nepochs          = 15
     dropout          = 0.5
-    batch_size       = 100
+    batch_size       = 20
     lr_method        = "adam"
     lr               = 0.001
     lr_decay         = 0.9
@@ -105,4 +136,4 @@ class Config():
 
     # NOTE: if both chars and crf, only 1.6x slower on GPU
     use_crf = True # if crf, training is 1.7x slower on CPU
-    use_chars = False # if char embedding, training is 3.5x slower on CPU
+    use_chars = True # if char embedding, training is 3.5x slower on CPU
