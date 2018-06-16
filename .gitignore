@@ -1,2 +1,5 @@
 *.pyc
 *.DS_Store
+data/
+MemNet_ABSA/
+TD-LSTM/

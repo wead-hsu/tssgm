@@ -46,6 +46,8 @@ def create_labeled_data_for_target_level_absa(train_fn, test_fn, save_dir):
                 if 'from' not in opinion.attrib:
                     continue
                 polarity = opinion.attrib['polarity']
+                if polarity == 'conflict':
+                    continue
                 sidx = int(opinion.attrib['from'])
                 eidx = int(opinion.attrib['to'])
                 if sidx == eidx == 0:
@@ -85,13 +87,14 @@ def create_labeled_data_for_target_level_absa(train_fn, test_fn, save_dir):
     #vocab['EOS'] = 0
     #vocab['UNK'] = 1
     random_index = np.random.permutation(len(train_samples))
-    dev_samples = train_samples[:200]
-    train_samples = train_samples[200:]
+    #dev_samples = train_samples[:200]
+    #train_samples = train_samples[200:]
+    dev_samples = []
 
     test_samples = []
     for sentence in test_data:
         data_sample = proc_sentence(sentence)
-        test_samples.append(data_sample)
+        test_samples.extend(data_sample)
     
     print('number of train samples:', len(train_samples))
     print('number of dev samples:', len(dev_samples))
