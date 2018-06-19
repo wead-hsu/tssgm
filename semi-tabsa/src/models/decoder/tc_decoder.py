@@ -37,6 +37,7 @@ def preprocess_data(fns, pretrain_fn, data_dir):
         for fn in fns:
             data          = pkl.load(open(fn, 'rb'), encoding='latin')
             words_sent   += [w for sample in data for i, w in enumerate(sample['tokens'])]
+
         def build_vocab(words, tokens):
             words = Counter(words)
             word2idx = {token: i for i, token in enumerate(tokens)}
@@ -76,7 +77,7 @@ def load_data(data_dir):
     return word2idx, embedding
 
 class TCDecoder(BaseModel):
-    def __init__(self, word2idx, embedding_dim, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z):
+    def __init__(self, word2idx, embedding_dim, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, decoder_type, grad_clip):
         super(TCDecoder, self).__init__()
 
         self.embedding_dim = embedding_dim
@@ -86,7 +87,10 @@ class TCDecoder(BaseModel):
         self.max_sentence_len = max_sentence_len
         self.l2_reg = l2_reg
         self.word2idx = word2idx
+        self.vocab_size = max(word2idx.values()) + 1
         self.dim_z = dim_z
+        self.decoder_type = decoder_type
+        self.grad_clip = grad_clip
 
         if embedding is None:
             logger.info('No embedding is given, initialized randomly')
@@ -95,100 +99,12 @@ class TCDecoder(BaseModel):
         elif isinstance(embedding, np.ndarray):
             logger.info('Numerical embedding is given with shape {}'.format(str(embedding.shape)))
             self.embedding = tf.constant(embedding, name='embedding')
-        elif isinstance(embedding, tf.Variable):
+        elif isinstance(embedding, tf.Tensor):
             logger.info('Import tensor as the embedding: '.format(embedding.name))
             self.embedding = embedding
+        else:
+            raise Exception('Embedding type {} is not supported'.format(type(embedding)))
 
-        with tf.name_scope('weights'):
-            self.weights = {
-                'softmax_bi_lstm': tf.get_variable(
-                    name='bi_lstm_w',
-                    shape=[2 * self.n_hidden, self.n_class],
-                    initializer=tf.random_uniform_initializer(-0.003, 0.003),
-                    regularizer=tf.contrib.layers.l2_regularizer(self.l2_reg)
-                )
-            }
-
-        with tf.name_scope('biases'):
-            self.biases = {
-                'softmax_bi_lstm': tf.get_variable(
-                    name='bi_lstm_b',
-                    shape=[self.n_class],
-                    initializer=tf.random_uniform_initializer(-0.003, 0.003),
-                    regularizer=tf.contrib.layers.l2_regularizer(self.l2_reg)
-                )
-            }
-
-
-    def lstm(self, emb_inp, mask, init_state, label_oh, scope_name, args):
-        with tf.variable_scope(scope_name):
-
-            if args.decoder_type == 'sclstm':
-                logger.info('Using ScLSTM as the decoder')
-                from sssp.models.layers.sclstm import ScLSTM
-                y_inp = tf.tile(label_oh[:, None, :], [1, tf.shape(emb_inp)[1], 1])
-                sclstm_layer = ScLSTM(args.embd_dim, args.num_units, args.num_classes, cell_clip=args.grad_clip)
-                _, dec_outs = sclstm_layer.forward(emb_inp, mask, y_inp, return_final=False, initial_state=(init_state, init_state))
-                cell = sclstm_layer._lstm_step
-            else:
-                logger.info('Using LSTM as the decoder')
-                emb_inp = tf.concat([emb_inp, tf.tile(label_oh[:, None, :], [1, tf.shape(emb_inp)[1], 1])], axis=2)
-
-                cell = self._get_rnn_cell(args.rnn_type, args.num_units, args.num_layers, args.grad_clip)
-
-                dec_outs, _ = tf.nn.dynamic_rnn(
-                        cell=cell,
-                        inputs=emb_inp,
-                        sequence_length=tf.to_int32(tf.reduce_sum(mask, axis=1)),
-                        initial_state=tf.contrib.rnn.LSTMStateTuple(init_state, init_state)
-                        )
-
-            w_t = tf.get_variable(
-                    'proj_w', 
-                    [args.vocab_size, args.num_units])
-            b = tf.get_variable(
-                    "proj_b", 
-                    [args.vocab_size])
-            out_proj = (w_t, b)
-
-        return dec_outs, out_proj, cell
-
-    def bi_dynamic_lstm(self, inputs_fw, inputs_bw, sen_len_fw, sen_len_bw, keep_rate):
-        """
-        :params: self.x_fw, self.x_bw, self.seq_len, self.seq_len_bw,
-                self.weights['softmax_lstm'], self.biases['softmax_lstm']
-        :return: non-norm prediction values
-        """
-        inputs_fw = tf.nn.dropout(inputs_fw, keep_prob=keep_rate)
-        inputs_bw = tf.nn.dropout(inputs_bw, keep_prob=keep_rate)
-
-        with tf.name_scope('forward_lstm'):
-            outputs_fw, state_fw = tf.nn.dynamic_rnn(
-                tf.contrib.rnn.LSTMCell(self.n_hidden),
-                inputs=inputs_fw,
-                sequence_length=sen_len_fw,
-                dtype=tf.float32,
-                scope='LSTM_fw'
-            )
-            batch_size = tf.shape(outputs_fw)[0]
-            index = tf.range(0, batch_size) * self.max_sentence_len + (sen_len_fw - 1)
-            output_fw = tf.gather(tf.reshape(outputs_fw, [-1, self.n_hidden]), index)  # batch_size * n_hidden
-
-        with tf.name_scope('backward_lstm'):
-            outputs_bw, state_bw = tf.nn.dynamic_rnn(
-                tf.contrib.rnn.LSTMCell(self.n_hidden),
-                inputs=inputs_bw,
-                sequence_length=sen_len_bw,
-                dtype=tf.float32,
-                scope='LSTM_bw'
-            )
-            batch_size = tf.shape(outputs_bw)[0]
-            index = tf.range(0, batch_size) * self.max_sentence_len + (sen_len_bw - 1)
-            output_bw = tf.gather(tf.reshape(outputs_bw, [-1, self.n_hidden]), index)  # batch_size * n_hidden
-
-        output = tf.concat([output_fw, output_bw], 1)  # batch_size * 2n_hidden
-        predict = tf.matmul(output, self.weights['softmax_bi_lstm']) + self.biases['softmax_bi_lstm']
-        return predict
 
     def create_placeholders(self, tag):
         with tf.name_scope('inputs'):
@@ -208,136 +124,182 @@ class TCDecoder(BaseModel):
                 raise Exception('{} is not supported in create_placeholders'.format(tag))   
         return plhs
 
-    def forward(self, xa_inputs, y_inputs, z):
-        with tf.name_scope('forward'):
-            x_fw, sen_len_fw, x_bw, sen_len_bw, target_words = xa_inputs
-            y, = y_inputs
+    def forward_rnn(self, emb_inp, mask, init_state, y):
+        if self.decoder_type.lower() == 'sclstm':
+            logger.info('Using ScLSTM as the decoder')
+            from src.models.layers.sclstm import ScLSTM
+            y_inp = tf.tile(y[:, None, :], [1, tf.shape(emb_inp)[1], 1])
+            sclstm_layer = ScLSTM(emb_inp.shape[2], self.n_hidden, self.n_class, cell_clip=self.grad_clip)
+            _, dec_outs = sclstm_layer.forward(emb_inp, mask, y_inp, return_final=False, initial_state=(init_state, init_state))
+            cell = sclstm_layer._lstm_step
+        elif self.decoder_type.lower() == 'lstm':
+            logger.info('Using LSTM as the decoder')
+            emb_inp = tf.concat([emb_inp, tf.tile(y[:, None, :], [1, tf.shape(emb_inp)[1], 1])], axis=2)
+            cell = tf.contrib.rnn.LSTMCell(self.n_hidden, state_is_tuple=True, cell_clip=self.cell_clip)
 
-            batch_size = tf.shape(inputs_fw)[0]
-            inputs_fw = tf.nn.embedding_lookup(self.embedding, x_fw)
-            inputs_bw = tf.nn.embedding_lookup(self.embedding, x_bw)
-            inputs_fw = tf.concat([tf.zeros([batch_size, 1, self.embedding_dim]), inputs_fw[:, -1, :]], axis=1)
-            inputs_bw = tf.concat([tf.zeros([batch_size, 1, self.embedding_dim]), inputs_bw[:, -1:,:]], axis=1)
-            target = tf.reduce_mean(tf.nn.embedding_lookup(self.embedding, target_words), 1, keep_dims=True)
+            dec_outs, _ = tf.nn.dynamic_rnn(
+                    cell=cell,
+                    inputs=emb_inp,
+                    sequence_length=tf.to_int32(tf.reduce_sum(mask, axis=1)),
+                    initial_state=tf.contrib.rnn.LSTMStateTuple(init_state, init_state)
+                    )
+        else:
+            raise Exception('Decoder type {} is not supported'.format(self.decoder_type))
+
+
+        w_t = tf.get_variable(
+                'proj_w', 
+                [self.vocab_size, self.n_hidden])
+        b = tf.get_variable(
+                "proj_b", 
+                [self.vocab_size])
+        out_proj = (w_t, b)
+
+        return dec_outs, out_proj, cell
+
+    def create_softmax_layer(self, proj, inp, targets, weights):
+        w_t, b = proj
+        inp_flt = tf.reshape(inp, [-1, tf.shape(inp)[-1]])
+        logits_flt = tf.add(tf.matmul(inp_flt, w_t, transpose_b=True), b[None, :])
+        logits = tf.reshape(logits_flt, [tf.shape(inp_flt)[0], -1, self.vocab_size])
+    
+        llh_precise = tf.contrib.seq2seq.sequence_loss(
+                logits=logits,
+                targets=targets,
+                weights=weights,
+                average_across_timesteps=False,
+                average_across_batch=False,
+                softmax_loss_function=None)
+
+        llh_precise = tf.reshape(llh_precise, tf.shape(targets))
+        return llh_precise
+
+    def forward(self, xa_inputs, y_inputs, z, hyper_inputs):
+        with tf.name_scope('forward'):
+            batch_size = tf.shape(xa_inputs['x_fw'])[0]
+       
+            z_ext = tf.contrib.layers.fully_connected(tf.reshape(z, [-1, self.dim_z]), self.n_hidden, tf.tanh, scope='extend_z')
+            z_ext = tf.nn.dropout(z_ext, hyper_inputs['keep_rate'])
+            yz = tf.concat([z_ext, y_inputs['y']], axis=1)
+            yz = tf.contrib.layers.fully_connected(yz, self.n_hidden, None, scope='yz_dense')
+            yz = tf.contrib.layers.batch_norm(yz, center=True, scale=True, is_training=hyper_inputs['is_training'], scope='yz_bn')
+            yz = tf.tanh(yz)
+            yz = tf.nn.dropout(yz, hyper_inputs['keep_rate'])
+
+            inputs_fw = tf.nn.embedding_lookup(self.embedding, xa_inputs['x_fw'])
+            inputs_bw = tf.nn.embedding_lookup(self.embedding, xa_inputs['x_bw'])
+            inputs_fw = tf.concat([tf.zeros([batch_size, 1, self.embedding_dim]), inputs_fw[:, :-1, :]], axis=1)
+            inputs_bw = tf.concat([tf.zeros([batch_size, 1, self.embedding_dim]), inputs_bw[:, :-1:,:]], axis=1)
+            target = tf.reduce_mean(tf.nn.embedding_lookup(self.embedding, xa_inputs['target_words']), 1, keep_dims=True)
             target = tf.zeros([batch_size, self.max_sentence_len, self.embedding_dim]) + target
             inputs_fw = tf.concat([inputs_fw, target], 2)
             inputs_bw = tf.concat([inputs_bw, target], 2)
+            
+            with tf.variable_scope('forward_lstm'):
+                mask = tf.to_float(tf.sequence_mask(xa_inputs['sen_len_fw'], tf.shape(inputs_fw)[1]))
+                outs, proj, cell  = self.forward_rnn(inputs_fw, mask, yz, y_inputs['y'])
+                outs = tf.nn.dropout(outs, hyper_inputs['keep_rate'])
+                recons_loss_fw = self.create_softmax_layer(proj, outs, xa_inputs['x_fw'], mask) * mask
+                recons_loss_fw = tf.reduce_sum(recons_loss_fw, axis=1)
 
-            enc_state = self.bi_dynamic_lstm(inputs_fw, inputs_bw, sen_len_fw, sen_len_bw, keep_rate)
+            with tf.variable_scope('backward_lstm'):
+                mask = tf.to_float(tf.sequence_mask(xa_inputs['sen_len_bw'], tf.shape(inputs_bw)[1]))
+                outs, proj, cell  = self.forward_rnn(inputs_bw, mask, yz, y_inputs['y'])
+                outs = tf.nn.dropout(outs, hyper_inputs['keep_rate'])
+                recons_loss_bw = self.create_softmax_layer(proj, outs, xa_inputs['x_fw'], mask) * mask
+                recons_loss_bw = tf.reduce_sum(recons_loss_bw, axis=1)
 
-            enc_state = tf.nn.dropout(enc_state, keep_rate)
-            enc_state = tf.contrib.layers.fully_connected(enc_state, 
-                    num_outputs=self.n_hidden,
-                    activation_fn=None,
-                    scope='x_to_a') # change to layers.dense?
-            enc_state = tf.contrib.layers.batch_norm(enc_state,
-                    center=True,
-                    scale=True,
-                    is_training=is_training,
-                    scope='bn_a')
-            enc_state = tf.tanh(enc_state)
-            enc_state = tf.nn.dropout(enc_state, keep_rate)
-    
-            with tf.variable_scope('latent'):
-                y_enc_in = tf.contrib.layers.fully_connected(y, self.n_hidden, tf.tanh, scope='y_enc_in')
-                y_enc_in = tf.nn.dropout(y_enc_in, keep_rate)
-                pst_in = tf.concat([y_enc_in, enc_state], axis=1)
-                pst_in = tf.contrib.layers.fully_connected(pst_in, self.n_hidden, None, scope='pst_in_dense')
-                pst_in = tf.contrib.layers.batch_norm(pst_in, center=True, scale=True, 
-                        is_training=is_training, scope='pst_in_bn')
-                pst_in = tf.tanh(pst_in)
-                pst_in = tf.nn.dropout(pst_in, keep_rate)
-                mu_pst = tf.contrib.layers.fully_connected(pst_in, self.dim_z, None, 
-                        scope='mu_posterior')
-                logvar_pst = tf.contrib.layers.fully_connected(pst_in, self.dim_z, None,
-                        scope='logvar_posterior')
-                mu_pri = tf.zeros_like(mu_pst)
-                logvar_pri = tf.ones_like(logvar_pst)
+            recons_loss = recons_loss_fw + recons_loss_bw
+            ppl_fw = tf.exp(tf.reduce_sum(recons_loss_fw) / (tf.to_float(tf.reduce_sum(xa_inputs['sen_len_fw'])) + 1e-3))
+            ppl_bw = tf.exp(tf.reduce_sum(recons_loss_bw) / (tf.to_float(tf.reduce_sum(xa_inputs['sen_len_bw'])) + 1e-3))
+            ppl = tf.exp(tf.reduce_sum(recons_loss) / (tf.to_float(tf.reduce_sum(xa_inputs['sen_len_fw'] + xa_inputs['sen_len_bw'])) + 1e-3))
 
-                dist_pri = tf.contrib.distributions.Normal(loc=mu_pri, scale=tf.exp(logvar_pri))
-                dist_pst = tf.contrib.distributions.Normal(loc=mu_pst, scale=tf.exp(logvar_pst))
-                kl_loss = tf.contrib.distributions.kl_divergence(dist_pst, dist_pri)
-                kl_loss = tf.reduce_sum(kl_loss, axis=1)
-                
-                z_st_pri = dist_pri.sample()
-                z_st_pst = dist_pst.sample()
+            #recons_loss = tf.reduce_mean(recons_loss)
 
-        return z_st_pst, z_st_pri, kl_loss
+        return recons_loss, ppl_fw, ppl_bw, ppl
 
     def run(self, sess, train_data, test_data, n_iter, keep_rate, save_dir):
-        with tf.Session() as sess:
-            input_placeholders = self.create_placeholders(has_label=True)
-            logits, _, _ = self.forward(input_placeholders)
-            y = tf.placeholder(tf.float32, [None, self.n_class], 'y')
-            print(logits, y)
+        self.init_global_step()
+        xa_inputs = self.create_placeholders('xa')
+        y_inputs = self.create_placeholders('y')
+        hyper_inputs = self.create_placeholders('hyper')
 
-            with tf.name_scope('loss'):
-                cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=y))
-    
-            with tf.name_scope('train'):
-                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(cost, global_step=self.global_step)
-    
-            with tf.name_scope('predict'):
-                correct_pred = tf.equal(tf.argmax(logits, axis=1), tf.argmax(y, axis=1))
-                accuracy = tf.reduce_sum(tf.cast(correct_pred, tf.int32))
-                _acc = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
-    
-            summary_loss = tf.summary.scalar('loss', cost)
-            summary_acc = tf.summary.scalar('acc', _acc)
-            train_summary_op = tf.summary.merge([summary_loss, summary_acc])
-            validate_summary_op = tf.summary.merge([summary_loss, summary_acc])
-            test_summary_op = tf.summary.merge([summary_loss, summary_acc])
+        z = tf.zeros([tf.shape(xa_inputs['x_fw'])[0], self.dim_z])
+        cost, ppl_fw, ppl_bw, ppl = self.forward(xa_inputs, y_inputs, z, hyper_inputs)
+        cost = tf.reduce_mean(cost)
 
-            import time
-            timestamp = str(int(time.time()))
-            _dir = save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(self.learning_rate) + '_b' + str(self.batch_size) + '_l' + str(self.l2_reg)
-            train_summary_writer = tf.summary.FileWriter(_dir + '/train', sess.graph)
-            test_summary_writer = tf.summary.FileWriter(_dir + '/test', sess.graph)
-            validate_summary_writer = tf.summary.FileWriter(_dir + '/validate', sess.graph)
+        with tf.name_scope('train'):
+            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(cost, global_step=self.global_step)
+   
+        summary_loss = tf.summary.scalar('loss', cost)
+        summary_ppl_fw = tf.summary.scalar('ppl_fw', ppl_fw)
+        summary_ppl_bw = tf.summary.scalar('ppl_bw', ppl_bw)
+        summary_ppl = tf.summary.scalar('ppl', ppl)
 
-            sess.run(tf.global_variables_initializer())
+        train_summary_op = tf.summary.merge([summary_loss, summary_ppl_fw, summary_ppl_bw, summary_ppl])
+        validate_summary_op = tf.summary.merge([summary_loss, summary_ppl_fw, summary_ppl_bw, summary_ppl])
+        test_summary_op = tf.summary.merge([summary_loss, summary_ppl_fw, summary_ppl_bw, summary_ppl])
 
-            def get_y(samples):
-                y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
-                ys = [y_dict[sample['polarity']] for sample in samples]
-                return ys
+        import time
+        timestamp = str(int(time.time()))
+        _dir = save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(self.learning_rate) + '_l' + str(self.l2_reg)
+        train_summary_writer = tf.summary.FileWriter(_dir + '/train', sess.graph)
+        test_summary_writer = tf.summary.FileWriter(_dir + '/test', sess.graph)
+        validate_summary_writer = tf.summary.FileWriter(_dir + '/validate', sess.graph)
 
-            max_acc = 0.
-            for i in range(n_iter):
-                #for train, _ in self.get_batch_data(train_data, keep_rate):
-                for samples, in train_data:
-                    feed_dict = self.get_feed_dict(input_placeholders, samples, 0.5)
-                    feed_dict.update({y: get_y(samples)})
-                    
-                    _, step, summary = sess.run([optimizer, self.global_step, train_summary_op], feed_dict=feed_dict)
-                    train_summary_writer.add_summary(summary, step)
-                acc, loss, cnt = 0., 0., 0
-                for samples, in test_data:
-                    feed_dict = self.get_feed_dict(input_placeholders, samples, 1.0)
-                    feed_dict.update({y: get_y(samples)})
-                    num = len(samples)
-                    _loss, _acc, summary = sess.run([cost, accuracy, test_summary_op], feed_dict=feed_dict)
-                    acc += _acc
-                    loss += _loss * num
-                    cnt += num
-                #print(cnt)
-                #print(acc)
-                test_summary_writer.add_summary(summary, step)
-                print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(step, loss / cnt, acc / cnt))
-                test_summary_writer.add_summary(summary, step)
-                if acc / cnt > max_acc:
-                    max_acc = acc / cnt
-            print('Optimization Finished! Max acc={}'.format(max_acc))
+        sess.run(tf.global_variables_initializer())
 
-            print('Learning_rate={}, iter_num={}, batch_size={}, hidden_num={}, l2={}'.format(
-                self.learning_rate,
-                n_iter,
-                self.batch_size,
-                self.n_hidden,
-                self.l2_reg
-            ))
+        def get_y(samples):
+            y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
+            ys = [y_dict[sample['polarity']] for sample in samples]
+            return ys
 
-    def prepare_data(self, samples, sentence_len, type_='', encoding='utf8'):
+        min_ppl = 1e8
+        for i in range(n_iter):
+            #for train, _ in self.get_batch_data(train_data, keep_rate):
+            for samples, in train_data:
+                feed_data = self.prepare_data(samples)
+                feed_data.update({'keep_rate': keep_rate, 'is_training': True})
+                xa_inputs.update(hyper_inputs)
+                xa_inputs.update(y_inputs)
+                feed_dict = self.get_feed_dict(xa_inputs, feed_data)
+                
+                _, step, summary = sess.run([optimizer, self.global_step, train_summary_op], feed_dict=feed_dict)
+                train_summary_writer.add_summary(summary, step)
+            res, loss, cnt = 0., 0., 0
+            for samples, in test_data:
+                feed_data = self.prepare_data(samples)
+                feed_data.update({'keep_rate': 1.0, 'is_training': False})
+                xa_inputs.update(hyper_inputs)
+                xa_inputs.update(y_inputs)
+                feed_dict = self.get_feed_dict(xa_inputs, feed_data)
+                
+                num = len(samples)
+                _loss, _ppl, summary = sess.run([cost, ppl, test_summary_op], feed_dict=feed_dict)
+                res += _ppl * num
+                loss += _loss * num
+                cnt += num
+            #print(cnt)
+            #print(ppl)
+            test_summary_writer.add_summary(summary, step)
+            print('Iter {}: mini-batch loss={:.6f}, test ppl={:.6f}'.format(step, loss / cnt, res / cnt))
+            test_summary_writer.add_summary(summary, step)
+            if res / cnt < min_ppl:
+                min_ppl = res / cnt
+        print('Optimization Finished! Min ppl={}'.format(min_ppl))
+
+        print('Learning_rate={}, iter_num={}, batch_size={}, hidden_num={}, l2={}'.format(
+            self.learning_rate,
+            n_iter,
+            self.batch_size,
+            self.n_hidden,
+            self.l2_reg
+        ))
+
+    def prepare_data(self, samples):
+        sentence_len = self.max_sentence_len
+        type_ = 'TC'
+        encoding = 'utf8'
         word_to_id = self.word2idx
     
         x, y, sen_len = [], [], []
@@ -388,12 +350,6 @@ class TCDecoder(BaseModel):
                 'target_words': np.asarray(target_words),
                 'y': np.asarray(y),
                 }
-    
-    def get_feed_dict(self, placeholders, samples, keep_rate, has_label=True):
-        feed_data = list(self.prepare_data(samples, self.max_sentence_len, type_='TC', has_label=True))
-        feed_data = feed_data + [np.asarray(keep_rate), True]
-        feed_dict = dict(zip(placeholders, feed_data))
-        return feed_dict
 
 def main(_):
     from src.io.batch_iterator import BatchIterator
@@ -424,7 +380,9 @@ def main(_):
                 max_sentence_len=FLAGS.max_sentence_len, 
                 l2_reg=FLAGS.l2_reg, 
                 embedding=embedding,
-                dim_z = 3)
+                dim_z = 3,
+                decoder_type=FLAGS.decoder_type,
+                grad_clip=FLAGS.grad_clip)
 
         model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.')
 
@@ -447,5 +405,45 @@ if __name__ == '__main__':
     #tf.app.flags.DEFINE_string('word_id_file_path', 'data/twitter/word_id.txt', 'word-id mapping file')
     tf.app.flags.DEFINE_string('type', 'TC', 'model type: ''(default), TD or TC')
     tf.app.flags.DEFINE_float('keep_rate', 0.5, 'keep rate')
+    tf.app.flags.DEFINE_string('decoder_type', 'sclstm', '[sclstm, lstm]')
+    tf.app.flags.DEFINE_float('grad_clip', 5, 'gradient_clip, <0 == None')
 
     tf.app.run()
+
+
+
+    """
+    def bi_dynamic_lstm(self, inputs_fw, inputs_bw, sen_len_fw, sen_len_bw, keep_rate):
+        inputs_fw = tf.nn.dropout(inputs_fw, keep_prob=keep_rate)
+        inputs_bw = tf.nn.dropout(inputs_bw, keep_prob=keep_rate)
+        with tf.name_scope('forward_lstm'):
+            outputs_fw, state_fw = tf.nn.dynamic_rnn(
+                tf.contrib.rnn.LSTMCell(self.n_hidden),
+                inputs=inputs_fw,
+                sequence_length=sen_len_fw,
+                dtype=tf.float32,
+                scope='LSTM_fw'
+            )
+            batch_size = tf.shape(outputs_fw)[0]
+            index = tf.range(0, batch_size) * self.max_sentence_len + (sen_len_fw - 1)
+            output_fw = tf.gather(tf.reshape(outputs_fw, [-1, self.n_hidden]), index)  # batch_size * n_hidden
+
+
+        out`
+
+        with tf.name_scope('backward_lstm'):
+            outputs_bw, state_bw = tf.nn.dynamic_rnn(
+                tf.contrib.rnn.LSTMCell(self.n_hidden),
+                inputs=inputs_bw,
+                sequence_length=sen_len_bw,
+                dtype=tf.float32,
+                scope='LSTM_bw'
+            )
+            batch_size = tf.shape(outputs_bw)[0]
+            index = tf.range(0, batch_size) * self.max_sentence_len + (sen_len_bw - 1)
+            output_bw = tf.gather(tf.reshape(outputs_bw, [-1, self.n_hidden]), index)  # batch_size * n_hidden
+
+        output = tf.concat([output_fw, output_bw], 1)  # batch_size * 2n_hidden
+        predict = tf.matmul(output, self.weights['softmax_bi_lstm']) + self.biases['softmax_bi_lstm']
+        return predict
+    """

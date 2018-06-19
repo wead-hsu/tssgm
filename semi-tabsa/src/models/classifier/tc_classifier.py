@@ -76,7 +76,7 @@ def load_data(data_dir):
     return word2idx, embedding
 
 class TCClassifier(BaseModel):
-    def __init__(self, word2idx, embedding_dim, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding):
+    def __init__(self, word2idx, embedding_dim, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, grad_clip):
         super(TCClassifier, self).__init__()
 
         self.embedding_dim = embedding_dim
@@ -86,6 +86,7 @@ class TCClassifier(BaseModel):
         self.max_sentence_len = max_sentence_len
         self.l2_reg = l2_reg
         self.word2idx = word2idx
+        self.grad_clip = grad_clip
 
         if embedding is None:
             logger.info('No embedding is given, initialized randomly')
@@ -94,9 +95,11 @@ class TCClassifier(BaseModel):
         elif isinstance(embedding, np.ndarray):
             logger.info('Numerical embedding is given with shape {}'.format(str(embedding.shape)))
             self.embedding = tf.constant(embedding, name='embedding')
-        elif isinstance(embedding, tf.Variable):
+        elif isinstance(embedding, tf.Tensor):
             logger.info('Import tensor as the embedding: '.format(embedding.name))
             self.embedding = embedding
+        else:
+            raise Exception('Embedding type is unknow'.format(type(embedding)))
 
         with tf.name_scope('weights'):
             self.weights = {
@@ -129,7 +132,7 @@ class TCClassifier(BaseModel):
 
         with tf.name_scope('forward_lstm'):
             outputs_fw, state_fw = tf.nn.dynamic_rnn(
-                tf.contrib.rnn.LSTMCell(self.n_hidden),
+                tf.contrib.rnn.LSTMCell(self.n_hidden, cell_clip=self.grad_clip),
                 inputs=inputs_fw,
                 sequence_length=sen_len_fw,
                 dtype=tf.float32,
@@ -141,7 +144,7 @@ class TCClassifier(BaseModel):
 
         with tf.name_scope('backward_lstm'):
             outputs_bw, state_bw = tf.nn.dynamic_rnn(
-                tf.contrib.rnn.LSTMCell(self.n_hidden),
+                tf.contrib.rnn.LSTMCell(self.n_hidden, cell_clip=self.grad_clip),
                 inputs=inputs_bw,
                 sequence_length=sen_len_bw,
                 dtype=tf.float32,
@@ -184,87 +187,98 @@ class TCClassifier(BaseModel):
             logits = self.bi_dynamic_lstm(inputs_fw, inputs_bw, xa_inputs['sen_len_fw'], xa_inputs['sen_len_bw'], hyper_inputs['keep_rate'])
         return logits
 
+    def get_loss(self, logits, y_inputs, pri_prob_y):
+        y = tf.argmax(y_inputs['y'], axis=1)
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
+        pri_loss = tf.log(tf.gather(pri_prob_y, y))
+        correct_pred = tf.equal(tf.argmax(logits, axis=1), y)
+        acc = tf.reduce_mean(tf.to_float(correct_pred))
+        return loss, acc, pri_loss
+
     def run(self, sess, train_data, test_data, n_iter, keep_rate, save_dir):
-        with tf.Session() as sess:
-            input_placeholders = self.create_placeholders('xa')
-            hyper_inputs = self.create_placeholders('hyper')
-            print(input_placeholders, hyper_inputs)
-            logits = self.forward(input_placeholders, hyper_inputs)
-            y = tf.placeholder(tf.int32, [None, self.n_class], 'y')
+        self.init_global_step()
+        input_placeholders = self.create_placeholders('xa')
+        hyper_inputs = self.create_placeholders('hyper')
+        print(input_placeholders, hyper_inputs)
+        logits = self.forward(input_placeholders, hyper_inputs)
+        y = tf.placeholder(tf.int32, [None, self.n_class], 'y')
 
-            with tf.name_scope('loss'):
-                cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=y))
-    
-            with tf.name_scope('train'):
-                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(cost, global_step=self.global_step)
-    
-            with tf.name_scope('predict'):
-                correct_pred = tf.equal(tf.argmax(logits, axis=1), tf.argmax(y, axis=1))
-                accuracy = tf.reduce_sum(tf.cast(correct_pred, tf.int32))
-                _acc = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
-    
-            summary_loss = tf.summary.scalar('loss', cost)
-            summary_acc = tf.summary.scalar('acc', _acc)
-            train_summary_op = tf.summary.merge([summary_loss, summary_acc])
-            validate_summary_op = tf.summary.merge([summary_loss, summary_acc])
-            test_summary_op = tf.summary.merge([summary_loss, summary_acc])
+        with tf.name_scope('loss'):
+            cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=y))
 
-            import time
-            timestamp = str(int(time.time()))
-            _dir = save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(self.learning_rate) + '_b'  + '_l' + str(self.l2_reg)
-            train_summary_writer = tf.summary.FileWriter(_dir + '/train', sess.graph)
-            test_summary_writer = tf.summary.FileWriter(_dir + '/test', sess.graph)
-            validate_summary_writer = tf.summary.FileWriter(_dir + '/validate', sess.graph)
+        with tf.name_scope('train'):
+            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(cost, global_step=self.global_step)
 
-            sess.run(tf.global_variables_initializer())
+        with tf.name_scope('predict'):
+            correct_pred = tf.equal(tf.argmax(logits, axis=1), tf.argmax(y, axis=1))
+            accuracy = tf.reduce_sum(tf.cast(correct_pred, tf.int32))
+            _acc = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
 
-            def get_y(samples):
-                y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
-                ys = [y_dict[sample['polarity']] for sample in samples]
-                return ys
+        summary_loss = tf.summary.scalar('loss', cost)
+        summary_acc = tf.summary.scalar('acc', _acc)
+        train_summary_op = tf.summary.merge([summary_loss, summary_acc])
+        validate_summary_op = tf.summary.merge([summary_loss, summary_acc])
+        test_summary_op = tf.summary.merge([summary_loss, summary_acc])
 
-            max_acc = 0.
-            for i in range(n_iter):
-                #for train, _ in self.get_batch_data(train_data, keep_rate):
-                for samples, in train_data:
-                    feed_data = self.prepare_data(samples, self.max_sentence_len, type_='TC')
-                    feed_data.update({'keep_rate': keep_rate})
-                    input_placeholders.update(hyper_inputs)
-                    feed_dict = self.get_feed_dict(input_placeholders, feed_data)
-                    feed_dict.update({y: get_y(samples)})
-                    
-                    _, step, summary = sess.run([optimizer, self.global_step, train_summary_op], feed_dict=feed_dict)
-                    train_summary_writer.add_summary(summary, step)
-                acc, loss, cnt = 0., 0., 0
-                for samples, in test_data:
-                    feed_data = self.prepare_data(samples, self.max_sentence_len, type_='TC')
-                    feed_data.update({'keep_rate': 1.0})
-                    input_placeholders.update(hyper_inputs)
-                    feed_dict = self.get_feed_dict(input_placeholders, feed_data)
-                    feed_dict.update({y: get_y(samples)})
+        import time
+        timestamp = str(int(time.time()))
+        _dir = save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(self.learning_rate) + '_b'  + '_l' + str(self.l2_reg)
+        train_summary_writer = tf.summary.FileWriter(_dir + '/train', sess.graph)
+        test_summary_writer = tf.summary.FileWriter(_dir + '/test', sess.graph)
+        validate_summary_writer = tf.summary.FileWriter(_dir + '/validate', sess.graph)
 
-                    num = len(samples)
-                    _loss, _acc, summary = sess.run([cost, accuracy, test_summary_op], feed_dict=feed_dict)
-                    acc += _acc
-                    loss += _loss * num
-                    cnt += num
-                #print(cnt)
-                #print(acc)
-                test_summary_writer.add_summary(summary, step)
-                print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(step, loss / cnt, acc / cnt))
-                test_summary_writer.add_summary(summary, step)
-                if acc / cnt > max_acc:
-                    max_acc = acc / cnt
-            print('Optimization Finished! Max acc={}'.format(max_acc))
+        sess.run(tf.global_variables_initializer())
 
-            print('Learning_rate={}, iter_num={}, hidden_num={}, l2={}'.format(
-                self.learning_rate,
-                n_iter,
-                self.n_hidden,
-                self.l2_reg
-            ))
+        def get_y(samples):
+            y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
+            ys = [y_dict[sample['polarity']] for sample in samples]
+            return ys
 
-    def prepare_data(self, samples, sentence_len, type_='', encoding='utf8'):
+        max_acc = 0.
+        for i in range(n_iter):
+            #for train, _ in self.get_batch_data(train_data, keep_rate):
+            for samples, in train_data:
+                feed_data = self.prepare_data(samples)
+                feed_data.update({'keep_rate': keep_rate})
+                input_placeholders.update(hyper_inputs)
+                feed_dict = self.get_feed_dict(input_placeholders, feed_data)
+                feed_dict.update({y: get_y(samples)})
+                
+                _, step, summary = sess.run([optimizer, self.global_step, train_summary_op], feed_dict=feed_dict)
+                train_summary_writer.add_summary(summary, step)
+            acc, loss, cnt = 0., 0., 0
+            for samples, in test_data:
+                feed_data = self.prepare_data(samples)
+                feed_data.update({'keep_rate': 1.0})
+                input_placeholders.update(hyper_inputs)
+                feed_dict = self.get_feed_dict(input_placeholders, feed_data)
+                feed_dict.update({y: get_y(samples)})
+
+                num = len(samples)
+                _loss, _acc, summary = sess.run([cost, accuracy, test_summary_op], feed_dict=feed_dict)
+                acc += _acc
+                loss += _loss * num
+                cnt += num
+            #print(cnt)
+            #print(acc)
+            test_summary_writer.add_summary(summary, step)
+            print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(step, loss / cnt, acc / cnt))
+            test_summary_writer.add_summary(summary, step)
+            if acc / cnt > max_acc:
+                max_acc = acc / cnt
+        print('Optimization Finished! Max acc={}'.format(max_acc))
+
+        print('Learning_rate={}, iter_num={}, hidden_num={}, l2={}'.format(
+            self.learning_rate,
+            n_iter,
+            self.n_hidden,
+            self.l2_reg
+        ))
+
+    def prepare_data(self, samples): # , sentence_len, type_='', encoding='utf8'):
+        sentence_len = self.max_sentence_len
+        type_='TC'
+        encoding='utf8'
         word_to_id = self.word2idx
     
         x, y, sen_len = [], [], []
@@ -276,8 +290,9 @@ class TCClassifier(BaseModel):
             target_word = list(map(lambda w: word_to_id.get(w, 0), target_word))
             target_words.append([target_word[0]]) #?????
             
-            polarity = sample['polarity']
-            y.append(y_dict[polarity])
+            if 'polarity' in sample:
+                polarity = sample['polarity']
+                y.append(y_dict[polarity])
     
             words = sample['tokens']
             words = [sample['tokens'][i] if sample['tags'][i] == 'O' else '$t$' for i in range(len(words))]
@@ -310,7 +325,8 @@ class TCClassifier(BaseModel):
                 'sen_len_fw': np.asarray(sen_len), 
                 'x_bw': np.asarray(x_r),
                 'sen_len_bw':np.asarray(sen_len_r), 
-                'target_words': np.asarray(target_words)
+                'target_words': np.asarray(target_words),
+                'y': np.asarray(y),
                 }
     
 def main(_):
@@ -341,7 +357,8 @@ def main(_):
                 n_class=FLAGS.n_class, 
                 max_sentence_len=FLAGS.max_sentence_len, 
                 l2_reg=FLAGS.l2_reg, 
-                embedding=embedding)
+                embedding=embedding,
+                grad_clip=FLAGS.grad_clip)
 
         model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, data_dir)
 
@@ -364,5 +381,6 @@ if __name__ == '__main__':
     #tf.app.flags.DEFINE_string('word_id_file_path', 'data/twitter/word_id.txt', 'word-id mapping file')
     tf.app.flags.DEFINE_string('type', 'TC', 'model type: ''(default), TD or TC')
     tf.app.flags.DEFINE_float('keep_rate', 0.5, 'keep rate')
+    tf.app.flags.DEFINE_float('grad_clip', 5.0, 'gradient_clip')
 
     tf.app.run()

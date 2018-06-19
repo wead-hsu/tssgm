@@ -29,7 +29,6 @@ class BaseModel(object):
         """
         All hyper-parameters should be provided in the init function.
         """
-        self.init_global_step()
 
     def init_global_step(self):
         if not hasattr(self, 'global_step'):
@@ -44,12 +43,7 @@ class BaseModel(object):
     def forward(self, inputs):
         raise NotImplementedError
 
-    def training_op(self, cost, var_list,
-            grad_clip=-1,
-            max_norm=-1,
-            learning_rate=0.001,
-            grads=None):
-        
+    def training_op(self, cost, var_list, grad_clip=-1, max_norm=-1, learning_rate=0.001, grads=None):
         # ------------- calc gradients --------------------------
         if grads is None:
             grads = tf.gradients(cost, var_list)
@@ -71,7 +65,7 @@ class BaseModel(object):
         feed_dict = {}
         for plh in plhs_dict:
             if not plh in data_dict:
-                raise Exception('{} is not given for the input'.format(plh.name))
+                raise Exception('{} is not given for the input'.format(plh))
             feed_dict[plhs_dict[plh]] = data_dict[plh]
         return feed_dict
 
