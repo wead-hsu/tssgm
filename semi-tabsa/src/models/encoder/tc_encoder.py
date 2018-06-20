@@ -203,7 +203,6 @@ class TCEncoder(BaseModel):
             enc_state = tf.nn.dropout(enc_state, hyper_inputs['keep_rate'])
     
             with tf.variable_scope('latent'):
-                #print(y_inputs['y'])
                 y_enc_in = tf.contrib.layers.fully_connected(y_inputs['y'], self.n_hidden, tf.tanh, scope='y_enc_in')
                 y_enc_in = tf.nn.dropout(y_enc_in, hyper_inputs['keep_rate'])
                 pst_in = tf.concat([y_enc_in, enc_state], axis=1)
@@ -226,7 +225,6 @@ class TCEncoder(BaseModel):
                 
                 z_st_pri = dist_pri.sample()
                 z_st_pst = dist_pst.sample()
-        
         return z_st_pst, z_st_pri, kl_loss
 
     def run(self, sess, train_data, test_data, n_iter, keep_rate, save_dir):

@@ -135,7 +135,7 @@ class TCDecoder(BaseModel):
         elif self.decoder_type.lower() == 'lstm':
             logger.info('Using LSTM as the decoder')
             emb_inp = tf.concat([emb_inp, tf.tile(y[:, None, :], [1, tf.shape(emb_inp)[1], 1])], axis=2)
-            cell = tf.contrib.rnn.LSTMCell(self.n_hidden, state_is_tuple=True, cell_clip=self.cell_clip)
+            cell = tf.contrib.rnn.LSTMCell(self.n_hidden, state_is_tuple=True, cell_clip=self.grad_clip)
 
             dec_outs, _ = tf.nn.dynamic_rnn(
                     cell=cell,
@@ -279,8 +279,6 @@ class TCDecoder(BaseModel):
                 res += _ppl * num
                 loss += _loss * num
                 cnt += num
-            #print(cnt)
-            #print(ppl)
             test_summary_writer.add_summary(summary, step)
             print('Iter {}: mini-batch loss={:.6f}, test ppl={:.6f}'.format(step, loss / cnt, res / cnt))
             test_summary_writer.add_summary(summary, step)

@@ -17,6 +17,15 @@ logger = logging.getLogger(__name__)
 UNK_TOKEN = "$unk$"
 ASP_TOKEN = "$t$"
 
+def get_batch(dataset):
+    """ to get batch from an iterator, whenever the ending is reached. """
+    while True:
+        try:
+            batch = dataset.next()
+            break
+        except:
+            pass
+    return batch
 
 def preprocess_data(fns, pretrain_fn, data_dir):
     """
@@ -111,8 +120,6 @@ class SemiTABSA(BaseModel):
         else:
             raise Exception('Embedding type {} is not supported'.format(type(embedding)))
 
-        print(type(self.embedding))
-
         with tf.variable_scope('classifier'):
             self.classifier = TCClassifier(word2idx=word2idx, 
                     embedding_dim=embedding_dim, 
@@ -155,7 +162,7 @@ class SemiTABSA(BaseModel):
         self.klw = tf.placeholder(tf.float32, [], 'klw')
         self.pri_prob_y =  pri_prob_y # distribution of y in the dataset
     
-    def run(self, sess, train_l, train_u, n_iter, keep_rate, save_dir):
+    def run(self, sess, train_data_l, train_data_u, test_data, n_iter, keep_rate, save_dir):
         self.init_global_step()
         with tf.name_scope('labeled'):
             with tf.variable_scope('classifier'):
@@ -175,45 +182,44 @@ class SemiTABSA(BaseModel):
                 self.decoder_xa_l = self.decoder.create_placeholders('xa') #x is included since x is generated sequentially
                 self.decoder_y_l = self.decoder.create_placeholders('y')
                 self.decoder_hyper_l = self.decoder.create_placeholders('hyper')
-                decoder_loss_l, ppl_fw_l, ppl_bw_l, ppl_l = self.decoder.forward(self.decoder_xa_l, self.decoder_y_l, tf.zeros_like(z_pst), self.decoder_hyper_l) #debug
-            elbo_l = encoder_loss_l * self.klw + decoder_loss_l #- pri_loss_l debug
+                decoder_loss_l, ppl_fw_l, ppl_bw_l, ppl_l = self.decoder.forward(self.decoder_xa_l, self.decoder_y_l, z_pst, self.decoder_hyper_l) #debug
+            elbo_l = encoder_loss_l * self.klw + decoder_loss_l - pri_loss_l #debug
 
         self.loss_l = elbo_l
         self.loss_c = classifier_loss_l
-
-        """
-        with tf.variable_scope('unlabeled'):
-            with tf.variable_scope('classifier'):
+        
+        with tf.name_scope('unlabeled'):
+            with tf.variable_scope('classifier', reuse=True):
                 self.classifier_xa_u = self.classifier.create_placeholders('xa')
-                logits_u = classifier.forward(self.classifier_inputs_u)
-                predict_u = tf.softmax(logits_u)
-                classifier_loss_u = tf.losses.softmax_cross_entropy(predict_u, predict_u)
+                self.classifier_hyper_u = self.classifier.create_placeholders('hyper')
+                logits_u = self.classifier.forward(self.classifier_xa_u, self.classifier_hyper_u)
+                predict_u = tf.nn.softmax(logits_u)
+                classifier_entropy_u = tf.losses.softmax_cross_entropy(predict_u, predict_u)
 
-                self.recons_loss_u, self.kl_loss_u, self.loss_sum_u = [], [], []
-                encoder_loss_u, decoder_loss_u = [], []
-                
+            encoder_loss_u, decoder_loss_u = [], []
             elbo_u = []
             self.encoder_xa_u = self.encoder.create_placeholders('xa')
+            self.encoder_hyper_u = self.encoder.create_placeholders('hyper')
             self.decoder_xa_u = self.decoder.create_placeholders('xa')
+            self.decoder_hyper_u = self.decoder.create_placeholders('hyper')
+            batch_size = tf.shape(list(self.encoder_xa_u.values())[0])[0]
             for idx in range(self.n_class):
-                with tf.variable_scope('encoder'):
-                    _label = tf.constant(idx)
-                    _label = tf.tile([idx], [tf.shape(self.classifier_xa_u[0])[0]])
-                    _z_pst, _, _encoder_loss = self.encoder.forward(self.encoder_xa_u)
+                with tf.variable_scope('encoder', reuse=True):
+                    _label = tf.gather(tf.eye(self.n_class), idx)
+                    _label = tf.tile(_label[None, :], [batch_size, 1])
+                    _z_pst, _, _encoder_loss = self.encoder.forward(self.encoder_xa_u, {'y':_label}, self.decoder_hyper_u)
                     encoder_loss_u.append(_encoder_loss * self.klw)
-                    _pri_loss_u = tf.log(tf.gather(self.pri_prob_y, y))
+                    _pri_loss_u = tf.log(tf.gather(self.pri_prob_y, idx))
             
-                with tf.variable_scope('decoedr'):
-                    _decoder_loss = self.decoder.forward(self.decoder_xa_u, _label, _z_pst)
+                with tf.variable_scope('decoder', reuse=True):
+                    _decoder_loss, _, _, _ = self.decoder.forward(self.decoder_xa_u, {'y':_label}, _z_pst, self.decoder_hyper_u)
                     decoder_loss_u.append(_decoder_loss)
 
-                _elbo_u = _encoder_loss_u * self.klw + _decoder_loss_u - _pri_loss_u
+                _elbo_u = _encoder_loss * self.klw + _decoder_loss - _pri_loss_u
                 elbo_u.append(_elbo_u)
 
-        self.loss_u = tf.add_n([(elbo_u[idx] * predict_u[:, idx] for idx in range(self.n_class)])
-        """
-
-        self.loss = tf.reduce_mean(elbo_l + classifier_loss_l) # for test
+        self.loss_u = tf.add_n([elbo_u[idx] * predict_u[:, idx] for idx in range(self.n_class)]) + classifier_entropy_u
+        self.loss = tf.reduce_mean(self.loss_l + classifier_loss_l + self.loss_u)
 
         vt = tf.trainable_variables()
         for var in vt:
@@ -224,17 +230,24 @@ class SemiTABSA(BaseModel):
             optimizer = self.training_op(self.loss, tf.trainable_variables(), self.grad_clip, 20, self.learning_rate)
         
         summary_loss = tf.summary.scalar('loss', self.loss)
+        summary_loss_l = tf.summary.scalar('loss_l', tf.reduce_mean(self.loss_l))
+        summary_loss_u = tf.summary.scalar('loss_u', tf.reduce_mean(self.loss_u))
         summary_acc = tf.summary.scalar('acc', classifier_acc_l)
         summary_ppl_fw = tf.summary.scalar('ppl_fw', ppl_fw_l)
         summary_ppl_bw = tf.summary.scalar('ppl_bw', ppl_bw_l)
         summary_ppl = tf.summary.scalar('ppl', ppl_l)
+        train_summary_op = tf.summary.merge_all()
 
-        train_summary_op = tf.summary.merge([summary_loss, summary_acc, summary_ppl_fw, summary_ppl_bw, summary_ppl])
-        validate_summary_op = tf.summary.merge([summary_loss, summary_acc, summary_ppl_fw, summary_ppl_bw, summary_ppl])
-        test_summary_op = tf.summary.merge([summary_loss, summary_acc, summary_ppl_fw, summary_ppl_bw, summary_ppl])
+        test_acc = tf.placeholder(tf.float32, [])
+        test_ppl = tf.placeholder(tf.float32, [])
+        summary_acc_test = tf.summary.scalar('test_acc', test_acc)
+        summary_ppl_test = tf.summary.scalar('test_ppl', test_ppl)
+        test_summary_op = tf.summary.merge([summary_acc_test, summary_ppl_test])
 
-        import time
+        import time, datetime
         timestamp = str(int(time.time()))
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+
         _dir = save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(self.learning_rate) + '_l' + str(self.l2_reg)
         train_summary_writer = tf.summary.FileWriter(_dir + '/train', sess.graph)
         test_summary_writer = tf.summary.FileWriter(_dir + '/test', sess.graph)
@@ -242,11 +255,16 @@ class SemiTABSA(BaseModel):
 
         sess.run(tf.global_variables_initializer())
 
-        def get_y(samples):
-            y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
-            ys = [y_dict[sample['polarity']] for sample in samples]
-            return ys
-
+        def get_batch(dataset):
+            """ to get batch from an iterator, whenever the ending is reached. """
+            while True:
+                try:
+                    batch = dataset.next()
+                    break
+                except:
+                    pass
+            return batch
+        
         def get_feed_dict_help(plhs, data_dict, keep_rate, is_training):
             plh_dict = {}
             for plh in plhs: plh_dict.update(plh)
@@ -258,7 +276,7 @@ class SemiTABSA(BaseModel):
         max_acc = 0.
         for i in range(n_iter):
             #for train, _ in self.get_batch_data(train_data, keep_rate):
-            for samples, in train_l:
+            for samples, in train_data_l:
                 feed_dict_clf_l = get_feed_dict_help(plhs=[self.classifier_xa_l, self.classifier_y_l, self.classifier_hyper_l],
                         data_dict=self.classifier.prepare_data(samples),
                         keep_rate=keep_rate,
@@ -273,6 +291,52 @@ class SemiTABSA(BaseModel):
                         data_dict=self.decoder.prepare_data(samples),
                         keep_rate=keep_rate,
                         is_training=True)
+                
+                samples, = get_batch(train_data_u)
+                feed_dict_clf_u = get_feed_dict_help(plhs=[self.classifier_xa_u, self.classifier_hyper_u],
+                        data_dict=self.classifier.prepare_data(samples),
+                        keep_rate=keep_rate,
+                        is_training=True)
+                
+                feed_dict_enc_u = get_feed_dict_help(plhs=[self.encoder_xa_u, self.encoder_hyper_l],
+                        data_dict=self.encoder.prepare_data(samples),
+                        keep_rate=keep_rate,
+                        is_training=True)
+ 
+                feed_dict_dec_u = get_feed_dict_help(plhs=[self.decoder_xa_u, self.decoder_hyper_u],
+                        data_dict=self.decoder.prepare_data(samples),
+                        keep_rate=keep_rate,
+                        is_training=True)
+
+                feed_dict = {}
+                feed_dict.update(feed_dict_clf_l)
+                feed_dict.update(feed_dict_enc_l)
+                feed_dict.update(feed_dict_dec_l)
+                feed_dict.update(feed_dict_clf_u)
+                feed_dict.update(feed_dict_enc_u)
+                feed_dict.update(feed_dict_dec_u)
+                feed_dict.update({self.klw: 0.001})
+
+                _, _acc, _loss, _ppl, _step, summary = sess.run([optimizer, classifier_acc_l, tf.reduce_mean(decoder_loss_l), ppl_l, self.global_step, train_summary_op], feed_dict=feed_dict)
+                train_summary_writer.add_summary(summary, _step)
+                #print(_acc, _loss, _ppl, _step)
+            
+            acc, ppl, loss, cnt = 0., 0., 0., 0
+            for samples, in test_data:
+                feed_dict_clf_l = get_feed_dict_help(plhs=[self.classifier_xa_l, self.classifier_y_l, self.classifier_hyper_l],
+                        data_dict=self.classifier.prepare_data(samples),
+                        keep_rate=1.0,
+                        is_training=False)
+                
+                feed_dict_enc_l = get_feed_dict_help(plhs=[self.encoder_xa_l, self.encoder_y_l, self.encoder_hyper_l],
+                        data_dict=self.encoder.prepare_data(samples),
+                        keep_rate=1.0,
+                        is_training=False)
+ 
+                feed_dict_dec_l = get_feed_dict_help(plhs=[self.decoder_xa_l, self.decoder_y_l, self.decoder_hyper_l],
+                        data_dict=self.decoder.prepare_data(samples),
+                        keep_rate=1.0,
+                        is_training=False)
 
                 feed_dict = {}
                 feed_dict.update(feed_dict_clf_l)
@@ -280,34 +344,21 @@ class SemiTABSA(BaseModel):
                 feed_dict.update(feed_dict_dec_l)
                 feed_dict.update({self.klw: 0})
 
-                _, _acc, _loss, _ppl, _step, summary = sess.run([optimizer, classifier_acc_l, tf.reduce_mean(decoder_loss_l), ppl_l, self.global_step, train_summary_op], feed_dict=feed_dict)
-                train_summary_writer.add_summary(summary, _step)
-                print(_acc, _loss, _ppl, _step)
-            
-            """
-            acc, loss, cnt = 0., 0., 0
-            for samples, in test_data:
-                feed_data = self.prepare_data(samples, self.max_sentence_len, type_='TC')
-                feed_data.update({'keep_rate': 1.0, 'is_training': False})
-                xa_inputs.update(hyper_inputs)
-                xa_inputs.update(y_inputs)
-                feed_dict = self.get_feed_dict(xa_inputs, feed_data)
-                feed_dict.update({y: get_y(samples)})
-
-                num = len(samples)
-                _loss, _acc, summary = sess.run([cost, accuracy, test_summary_op], feed_dict=feed_dict)
+                num = 1
+                _acc, _loss, _ppl, _step = sess.run([classifier_acc_l, tf.reduce_mean(decoder_loss_l), ppl_l, self.global_step], feed_dict=feed_dict)
                 acc += _acc
+                ppl += _ppl
                 loss += _loss * num
                 cnt += num
             #print(cnt)
             #print(acc)
-            test_summary_writer.add_summary(summary, step)
-            print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(step, loss / cnt, acc / cnt))
-            test_summary_writer.add_summary(summary, step)
+            summary, _step = sess.run([test_summary_op, self.global_step], feed_dict={test_acc: acc/cnt, test_ppl: ppl/cnt})
+            print(summary, _step)
+            test_summary_writer.add_summary(summary, _step)
+            print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(_step, loss / cnt, acc / cnt))
             if acc / cnt > max_acc:
                 max_acc = acc / cnt
 
-            """
         print('Optimization Finished! Max acc={}'.format(max_acc))
 
         print('Learning_rate={}, iter_num={}, hidden_num={}, l2={}'.format(
@@ -320,12 +371,14 @@ class SemiTABSA(BaseModel):
 def main(_):
     from src.io.batch_iterator import BatchIterator
     train = pkl.load(open('../../../data/se2014task06/tabsa-rest/train.pkl', 'rb'), encoding='latin')
+    unlabel = pkl.load(open('../../../data/se2014task06/tabsa-rest/unlabel.pkl', 'rb'), encoding='latin')[:10000]
     test = pkl.load(open('../../../data/se2014task06/tabsa-rest/test.pkl', 'rb'), encoding='latin')
 
     def get_y(samples):
         y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
         ys = [y_dict[sample['polarity']] for sample in samples]
         return ys
+
     y = get_y(train)
     pri_prob_y = (np.sum(y, axis=0)/len(y)).astype('float32')
     print(pri_prob_y)
@@ -338,6 +391,7 @@ def main(_):
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
     word2idx, embedding = preprocess_data(fns, '/Users/wdxu/data/glove/glove.6B/glove.6B.300d.txt', data_dir)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
+    unlabel_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
     test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=False)
 
     configproto = tf.ConfigProto()
@@ -360,7 +414,7 @@ def main(_):
                 decoder_type=FLAGS.decoder_type,
                 grad_clip=FLAGS.grad_clip,)
 
-        model.run(sess, train_it, None, FLAGS.n_iter, FLAGS.keep_rate, '.')
+        model.run(sess, train_it, unlabel_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.')
 
 if __name__ == '__main__':
     FLAGS = tf.app.flags.FLAGS
