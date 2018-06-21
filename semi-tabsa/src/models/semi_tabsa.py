@@ -10,6 +10,7 @@ import pickle as pkl
 import numpy as np
 import os
 import logging
+from collections import Counter
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -220,6 +221,7 @@ class SemiTABSA(BaseModel):
 
         self.loss_u = tf.add_n([elbo_u[idx] * predict_u[:, idx] for idx in range(self.n_class)]) + classifier_entropy_u
         self.loss = tf.reduce_mean(self.loss_l + classifier_loss_l + self.loss_u)
+        decoder_loss_l = tf.reduce_mean(decoder_loss_l)
 
         vt = tf.trainable_variables()
         for var in vt:
@@ -317,7 +319,7 @@ class SemiTABSA(BaseModel):
                 feed_dict.update(feed_dict_dec_u)
                 feed_dict.update({self.klw: 0.001})
 
-                _, _acc, _loss, _ppl, _step, summary = sess.run([optimizer, classifier_acc_l, tf.reduce_mean(decoder_loss_l), ppl_l, self.global_step, train_summary_op], feed_dict=feed_dict)
+                _, _acc, _loss, _ppl, _step, summary = sess.run([optimizer, classifier_acc_l, decoder_loss_l, ppl_l, self.global_step, train_summary_op], feed_dict=feed_dict)
                 train_summary_writer.add_summary(summary, _step)
                 #print(_acc, _loss, _ppl, _step)
             
@@ -345,7 +347,7 @@ class SemiTABSA(BaseModel):
                 feed_dict.update({self.klw: 0})
 
                 num = 1
-                _acc, _loss, _ppl, _step = sess.run([classifier_acc_l, tf.reduce_mean(decoder_loss_l), ppl_l, self.global_step], feed_dict=feed_dict)
+                _acc, _loss, _ppl, _step = sess.run([classifier_acc_l, decoder_loss_l, ppl_l, self.global_step], feed_dict=feed_dict)
                 acc += _acc
                 ppl += _ppl
                 loss += _loss * num
@@ -387,9 +389,9 @@ def main(_):
             '../../../data/se2014task06/tabsa-rest/dev.pkl',
             '../../../data/se2014task06/tabsa-rest/test.pkl',]
 
-    data_dir = 'classifier/0617'
+    data_dir = '0617'
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
-    word2idx, embedding = preprocess_data(fns, '/Users/wdxu/data/glove/glove.6B/glove.6B.300d.txt', data_dir)
+    word2idx, embedding = preprocess_data(fns, '../../../data/glove.6B/glove.6B.300d.txt', data_dir)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
     unlabel_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
     test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=False)

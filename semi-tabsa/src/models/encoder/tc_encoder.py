@@ -182,7 +182,7 @@ class TCEncoder(BaseModel):
         with tf.name_scope('forward'):
             inputs_fw = tf.nn.embedding_lookup(self.embedding, xa_inputs['x_fw'])
             inputs_bw = tf.nn.embedding_lookup(self.embedding, xa_inputs['x_bw'])
-            target = tf.reduce_mean(tf.nn.embedding_lookup(self.embedding, xa_inputs['target_words']), 1, keepdims=True)
+            target = tf.reduce_mean(tf.nn.embedding_lookup(self.embedding, xa_inputs['target_words']), 1, keep_dims=True)
             batch_size = tf.shape(inputs_bw)[0]
             target = tf.zeros([batch_size, self.max_sentence_len, self.embedding_dim]) + target
             inputs_fw = tf.concat([inputs_fw, target], 2)
