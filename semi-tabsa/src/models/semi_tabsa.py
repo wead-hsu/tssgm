@@ -161,9 +161,8 @@ class SemiTABSA(BaseModel):
                     )
 
         self.klw = tf.placeholder(tf.float32, [], 'klw')
-        self.pri_prob_y =  pri_prob_y # distribution of y in the dataset
     
-    def run(self, sess, train_data_l, train_data_u, test_data, n_iter, keep_rate, save_dir):
+    def run(self, sess, train_data_l, train_data_u, test_data, n_iter, keep_rate, save_dir, batch_size, alpha):
         self.init_global_step()
         with tf.name_scope('labeled'):
             with tf.variable_scope('classifier'):
@@ -220,7 +219,7 @@ class SemiTABSA(BaseModel):
                 elbo_u.append(_elbo_u)
 
         self.loss_u = tf.add_n([elbo_u[idx] * predict_u[:, idx] for idx in range(self.n_class)]) + classifier_entropy_u
-        self.loss = tf.reduce_mean(self.loss_l + classifier_loss_l + self.loss_u)
+        self.loss = tf.reduce_mean(self.loss_l + classifier_loss_l * alpha + self.loss_u)
         decoder_loss_l = tf.reduce_mean(decoder_loss_l)
 
         vt = tf.trainable_variables()
@@ -250,7 +249,8 @@ class SemiTABSA(BaseModel):
         timestamp = str(int(time.time()))
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
-        _dir = save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(self.learning_rate) + '_l' + str(self.l2_reg)
+        _dir = save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(self.learning_rate) + '_l' + str(self.l2_reg) +\
+                '_alpha' + str(alpha) + '_batchsize' + str(self.batch_size)
         train_summary_writer = tf.summary.FileWriter(_dir + '/train', sess.graph)
         test_summary_writer = tf.summary.FileWriter(_dir + '/test', sess.graph)
         validate_summary_writer = tf.summary.FileWriter(_dir + '/validate', sess.graph)
@@ -416,7 +416,7 @@ def main(_):
                 decoder_type=FLAGS.decoder_type,
                 grad_clip=FLAGS.grad_clip,)
 
-        model.run(sess, train_it, unlabel_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.')
+        model.run(sess, train_it, unlabel_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.', FLAGS.batch_size, FLAGS.alpha)
 
 if __name__ == '__main__':
     FLAGS = tf.app.flags.FLAGS
@@ -428,7 +428,7 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('max_sentence_len', 80, 'max number of tokens per sentence')
     tf.app.flags.DEFINE_float('l2_reg', 0.001, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
-    tf.app.flags.DEFINE_integer('n_iter', 20, 'number of train iter')
+    tf.app.flags.DEFINE_integer('n_iter', 200, 'number of train iter')
     
     tf.app.flags.DEFINE_string('train_file_path', 'data/twitter/train.raw', 'training file')
     tf.app.flags.DEFINE_string('validate_file_path', 'data/twitter/validate.raw', 'validating file')
@@ -438,5 +438,6 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_string('decoder_type', 'sclstm', '[sclstm, lstm]')
     tf.app.flags.DEFINE_float('grad_clip', 5, 'gradient_clip, <0 == None')
     tf.app.flags.DEFINE_integer('dim_z', 100, 'dimension of z latent variable')
+    tf.app.flags.DEFINE_float('alpha', 5.0, 'weight of alpha')
 
     tf.app.run()
