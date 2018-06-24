@@ -339,11 +339,13 @@ class TCEncoder(BaseModel):
                     flag = False
                     continue
                 if flag:
-                    if word in word_to_id:
-                        words_l.append(word_to_id[word])
+                    #if word in word_to_id:
+                        #words_l.append(word_to_id[word])
+                    words_l.append(word_to_id.get(word, word_to_id[UNK_TOKEN]))
                 else:
-                    if word in word_to_id:
-                        words_r.append(word_to_id[word])
+                    #if word in word_to_id:
+                        #words_r.append(word_to_id[word])
+                    words_r.append(word_to_id.get(word, word_to_id[UNK_TOKEN]))
             if type_ == 'TD' or type_ == 'TC':
                 words_l.extend(target_word)
                 sen_len.append(len(words_l))
