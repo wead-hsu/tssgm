@@ -95,7 +95,7 @@ class TCDecoder(BaseModel):
         if embedding is None:
             logger.info('No embedding is given, initialized randomly')
             wemb_init = np.random.randn([len(word2idx), embedding_dim]) * 1e-2
-            self.embedding = tf.get_variable('embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(embedding))
+            self.embedding = tf.get_variable('embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(wemb_init))
         elif isinstance(embedding, np.ndarray):
             logger.info('Numerical embedding is given with shape {}'.format(str(embedding.shape)))
             self.embedding = tf.constant(embedding, name='embedding')
@@ -142,6 +142,19 @@ class TCDecoder(BaseModel):
                     sequence_length=tf.to_int32(tf.reduce_sum(mask, axis=1)),
                     initial_state=tf.contrib.rnn.LSTMStateTuple(init_state, init_state)
                     )
+        elif self.decoder_type.lower() == 'gelstm':
+            logger.info('Using LSTM as the decoder')
+            cell = tf.contrib.rnn.LSTMCell(self.n_hidden, state_is_tuple=True, cell_clip=self.grad_clip)
+
+            dec_outs, _ = tf.nn.dynamic_rnn(
+                    cell=cell,
+                    inputs=emb_inp,
+                    sequence_length=tf.to_int32(tf.reduce_sum(mask, axis=1)),
+                    initial_state=tf.contrib.rnn.LSTMStateTuple(init_state, init_state)
+                    )
+
+            y_inp = tf.tile(y[:, None, :], [1, tf.shape(emb_inp)[1], 1])
+            dec_outs = tf.concat([dec_outs, y_inp], axis=2)
         else:
             raise Exception('Decoder type {} is not supported'.format(self.decoder_type))
 
@@ -207,7 +220,7 @@ class TCDecoder(BaseModel):
                 mask = tf.to_float(tf.sequence_mask(xa_inputs['sen_len_bw'], tf.shape(inputs_bw)[1]))
                 outs, proj, cell  = self.forward_rnn(inputs_bw, mask, yz, y_inputs['y'])
                 outs = tf.nn.dropout(outs, hyper_inputs['keep_rate'])
-                recons_loss_bw = self.create_softmax_layer(proj, outs, xa_inputs['x_fw'], mask) * mask
+                recons_loss_bw = self.create_softmax_layer(proj, outs, xa_inputs['x_bw'], mask) * mask
                 recons_loss_bw = tf.reduce_sum(recons_loss_bw, axis=1)
 
             recons_loss = recons_loss_fw + recons_loss_bw
@@ -390,7 +403,7 @@ def main(_):
 if __name__ == '__main__':
     FLAGS = tf.app.flags.FLAGS
     tf.app.flags.DEFINE_integer('embedding_dim', 300, 'dimension of word embedding')
-    tf.app.flags.DEFINE_integer('batch_size', 64, 'number of example per batch')
+    tf.app.flags.DEFINE_integer('batch_size', 20, 'number of example per batch')
     tf.app.flags.DEFINE_integer('n_hidden', 200, 'number of hidden unit')
     tf.app.flags.DEFINE_float('learning_rate', 0.01, 'learning rate')
     tf.app.flags.DEFINE_integer('n_class', 3, 'number of distinct class')
