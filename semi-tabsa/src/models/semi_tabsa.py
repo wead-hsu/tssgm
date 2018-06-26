@@ -248,7 +248,7 @@ class SemiTABSA(BaseModel):
         logger = ExpLogger('semi_tabsa', save_dir)
         logger.write_args(FLAGS)
         logger.write_variables(tf.trainable_variables())
-        logger.file_copy(['semi_tabsa.py', 'encoder', 'decoder'])
+        logger.file_copy(['semi_tabsa.py', 'encoder/*.py', 'decoder/*.py', 'classifier/*.py'])
 
         train_summary_writer = tf.summary.FileWriter(save_dir + '/train', sess.graph)
         test_summary_writer = tf.summary.FileWriter(save_dir + '/test', sess.graph)
@@ -299,7 +299,7 @@ class SemiTABSA(BaseModel):
                         keep_rate=keep_rate,
                         is_training=True)
                 
-                feed_dict_enc_u = get_feed_dict_help(plhs=[self.encoder_xa_u, self.encoder_hyper_l],
+                feed_dict_enc_u = get_feed_dict_help(plhs=[self.encoder_xa_u, self.encoder_hyper_u],
                         data_dict=self.encoder.prepare_data(samples),
                         keep_rate=keep_rate,
                         is_training=True)
@@ -316,7 +316,7 @@ class SemiTABSA(BaseModel):
                 feed_dict.update(feed_dict_clf_u)
                 feed_dict.update(feed_dict_enc_u)
                 feed_dict.update(feed_dict_dec_u)
-                feed_dict.update({self.klw: 0.001})
+                feed_dict.update({self.klw: 0.0001})
 
                 _, _acc, _loss, _ppl, _step, summary = sess.run([optimizer, classifier_acc_l, decoder_loss_l, ppl_l, self.global_step, train_summary_op], feed_dict=feed_dict)
                 train_summary_writer.add_summary(summary, _step)
@@ -376,9 +376,10 @@ def main(_):
     import time, datetime
     timestamp = str(int(time.time()))
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    save_dir = FLAGS.save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(FLAGS.learning_rate) + '_l' + str(FLAGS.l2_reg) +\
-                '_alpha' + str(FLAGS.alpha) + '_batchsize' + str(FLAGS.batch_size) + '_hidae' + str(FLAGS.n_hidden_ae)\
-                + '_dimz' + str(FLAGS.dim_z)  + '_dec' + str(FLAGS.decoder_type) + '_vochas10kunl_addunkpd_unlabelfix_noapconcattindec_nopri'
+    save_dir = FLAGS.save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(FLAGS.learning_rate) + '_l' + str(FLAGS.l2_reg)\
+                + '_alpha' + str(FLAGS.alpha) + '_batchsize' + str(FLAGS.batch_size) + '_hidae' + str(FLAGS.n_hidden_ae)\
+                + '_dimz' + str(FLAGS.dim_z)  + '_dec' + str(FLAGS.decoder_type) + '_unlabel' + str(FLAGS.n_unlabel)\
+                + '_vochas10kunl_addunkpd_noapconcattindec_kl1e-4_noh'
     #save_dir = 'tmp'
 
     from src.io.batch_iterator import BatchIterator
@@ -393,7 +394,7 @@ def main(_):
 
     y = get_y(train)
     pri_prob_y = (np.sum(y, axis=0)/len(y)).astype('float32')
-    pri_prob_y = np.ones(FLAGS.n_class).astype('float32')/FLAGS.n_class
+    #pri_prob_y = np.ones(FLAGS.n_class).astype('float32')/FLAGS.n_class
     print(pri_prob_y)
     
     fns = [FLAGS.train_file_path, FLAGS.unlabel_file_path, FLAGS.test_file_path]
@@ -401,7 +402,7 @@ def main(_):
     data_dir = 'unlabel10k'
     word2idx, embedding = preprocess_data(fns, '../../../data/glove.6B/glove.6B.300d.txt', data_dir)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
-    unlabel_it = BatchIterator(len(train), 64, [unlabel], testing=False)
+    unlabel_it = BatchIterator(len(unlabel), FLAGS.batch_size, [unlabel], testing=False)
     test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=False)
 
     configproto = tf.ConfigProto()
