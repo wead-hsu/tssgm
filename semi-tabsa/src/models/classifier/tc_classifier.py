@@ -293,7 +293,6 @@ class TCClassifier(BaseModel):
             if 'polarity' in sample:
                 polarity = sample['polarity']
                 y.append(y_dict[polarity])
-    
             words = sample['tokens']
             words = [sample['tokens'][i] if sample['tags'][i] == 'O' else '$t$' for i in range(len(words))]
             words_l, words_r = [], []
@@ -338,7 +337,7 @@ def main(_):
             '../../../../data/se2014task06/tabsa-rest/dev.pkl',
             '../../../../data/se2014task06/tabsa-rest/test.pkl',]
 
-    data_dir = '0617'
+    data_dir = '../0617'
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
     word2idx, embedding = preprocess_data(fns, '/Users/wdxu/data/glove/glove.6B/glove.6B.300d.txt', data_dir)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
@@ -359,7 +358,7 @@ def main(_):
                 l2_reg=FLAGS.l2_reg, 
                 embedding=embedding,
                 grad_clip=FLAGS.grad_clip)
-
+	
         model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, data_dir)
 
 if __name__ == '__main__':

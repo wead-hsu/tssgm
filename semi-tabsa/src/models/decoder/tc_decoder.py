@@ -206,7 +206,7 @@ class TCDecoder(BaseModel):
                 mask = tf.to_float(tf.sequence_mask(xa_inputs['sen_len_bw'], tf.shape(inputs_bw)[1]))
                 outs, proj, cell  = self.forward_rnn(inputs_bw, mask, yz, y_inputs['y'])
                 outs = tf.nn.dropout(outs, hyper_inputs['keep_rate'])
-                recons_loss_bw = self.create_softmax_layer(proj, outs, xa_inputs['x_fw'], mask) * mask
+                recons_loss_bw = self.create_softmax_layer(proj, outs, xa_inputs['x_bw'], mask) * mask
                 recons_loss_bw = tf.reduce_sum(recons_loss_bw, axis=1)
 
             recons_loss = recons_loss_fw + recons_loss_bw

@@ -316,7 +316,6 @@ class TCEncoder(BaseModel):
         type_ = 'TC'
         encoding = 'utf8'
         word_to_id = self.word2idx
-    
         x, y, sen_len = [], [], []
         x_r, sen_len_r = [], []
         target_words = []
@@ -374,9 +373,9 @@ def main(_):
             '../../../../data/se2014task06/tabsa-rest/dev.pkl',
             '../../../../data/se2014task06/tabsa-rest/test.pkl',]
 
-    data_dir = '../classifier/0617'
+    data_dir = '../0617'
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
-    word2idx, embedding = preprocess_data(fns, '/Users/wdxu/data/glove/glove.6B/glove.6B.300d.txt', data_dir)
+    word2idx, embedding = preprocess_data(fns, '../../../../data/glove.6B/glove.6B.300d.txt', data_dir)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
     test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=False)
 
