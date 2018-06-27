@@ -166,8 +166,15 @@ def create_unlabeled_data_for_target_level_absa(train_fn, save_dir):
         #print(len(records))
     
     pkl.dump(records, open(data_fn, 'w'))
+
+def clean_unlabel(train_fn, save_fn, min_sen_len=2, max_sen_len=80):
+    samples = pkl.load(open(train_fn))
+    samples = [sample for sample in samples if len(sample['tokens']) <= max_sen_len and len(sample['tokens']) >= min_sen_len]
+    pkl.dump(samples, open(save_fn, 'w'))
+    print('cleaned {}'.format(train_fn))
     
 if __name__ == '__main__':
+    """
     create_labeled_data_for_target_level_absa(train_fn='../../data/se2014task06/Restaurants_Train_Final.xml',
             test_fn='../../data/se2014task06/Restaurants_Test.xml',
             save_dir='../../data/se2014task06/tabsa-rest/')
@@ -175,6 +182,12 @@ if __name__ == '__main__':
     create_unlabeled_data_for_target_level_absa(train_fn='../../data/extra-rest/eval.seqtag.labeled',
             save_dir='../../data/se2014task06/tabsa-rest/')
 
+    clean_unlabel('../../data/se2014task06/tabsa-rest/unlabel.pkl',
+            '../../data/se2014task06/tabsa-rest/unlabel.clean.pkl',
+            max_sen_len=80, min_sen_len=2)
+    
+    """
+    """
     create_labeled_data_for_target_level_absa(train_fn='../../data/se2014task06/Laptops_Train_Final.xml',
             test_fn='../../data/se2014task06/Laptops_Test.xml',
             save_dir='../../data/se2014task06/tabsa-lapt/')
@@ -182,4 +195,8 @@ if __name__ == '__main__':
     create_unlabeled_data_for_target_level_absa(train_fn='../../data/extra-lapt/eval.seqtag.labeled',
             save_dir='../../data/se2014task06/tabsa-lapt/')
 
+    """
+    clean_unlabel('../../data/se2014task06/tabsa-lapt/unlabel.pkl',
+            '../../data/se2014task06/tabsa-lapt/unlabel.clean.pkl',
+            max_sen_len=83, min_sen_len=3)
 

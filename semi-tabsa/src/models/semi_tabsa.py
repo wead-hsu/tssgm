@@ -7,6 +7,7 @@ from src.models.classifier.tc_classifier import TCClassifier
 #from src.models.classifier.mem_classifier import MEMClassifier
 from src.models.encoder.tc_encoder import TCEncoder
 from src.models.decoder.tc_decoder import TCDecoder
+from src.io.exp_logger import ExpLogger
 import pickle as pkl
 import numpy as np
 import os
@@ -57,8 +58,9 @@ def preprocess_data(fns, pretrain_fn, data_dir):
         def build_vocab(words, tokens):
             words = Counter(words)
             word2idx = {token: i for i, token in enumerate(tokens)}
-            word2idx.update({w[0]: i+len(tokens) for i, w in enumerate(words.most_common())})
+            word2idx.update({w[0]: i+len(tokens) for i, w in enumerate(words.most_common(20000))})
             return word2idx
+
         word2idx_sent = build_vocab(words_sent, [UNK_TOKEN, ASP_TOKEN])
         with open(os.path.join(data_dir, 'vocab_sent.pkl'), 'wb') as f:
             pkl.dump(word2idx_sent, f)
@@ -93,7 +95,7 @@ def load_data(data_dir):
     return word2idx, embedding
 
 class SemiTABSA(BaseModel):
-    def __init__(self, word2idx, embedding_dim, batch_size, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, pri_prob_y, decoder_type, network_type, grad_clip):
+    def __init__(self, word2idx, embedding_dim, batch_size, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, pri_prob_y, decoder_type, grad_clip, n_hidden_ae):
         super(SemiTABSA, self).__init__()
 
         self.embedding_dim = embedding_dim
@@ -108,6 +110,7 @@ class SemiTABSA(BaseModel):
         self.decoder_type = decoder_type
         self.network_type = network_type
         self.grad_clip = grad_clip
+        self.n_hidden_ae = n_hidden_ae
         self.pri_prob_y = tf.Variable(pri_prob_y, trainable=False)
 
         if embedding is None:
@@ -146,7 +149,7 @@ class SemiTABSA(BaseModel):
         with tf.variable_scope('encoder'):
             self.encoder = TCEncoder(word2idx=word2idx, 
                     embedding_dim=embedding_dim, 
-                    n_hidden=n_hidden, 
+                    n_hidden=n_hidden_ae, 
                     learning_rate=learning_rate, 
                     n_class=n_class, 
                     max_sentence_len=max_sentence_len, 
@@ -159,7 +162,7 @@ class SemiTABSA(BaseModel):
         with tf.variable_scope('decoder'):
             self.decoder = TCDecoder(word2idx=word2idx, 
                     embedding_dim=embedding_dim, 
-                    n_hidden=n_hidden, 
+                    n_hidden=n_hidden_ae, 
                     learning_rate=learning_rate, 
                     n_class=n_class, 
                     max_sentence_len=max_sentence_len, 
@@ -172,7 +175,7 @@ class SemiTABSA(BaseModel):
 
         self.klw = tf.placeholder(tf.float32, [], 'klw')
     
-    def run(self, sess, train_data_l, train_data_u, test_data, n_iter, keep_rate, save_dir, batch_size, alpha):
+    def run(self, sess, train_data_l, train_data_u, test_data, n_iter, keep_rate, save_dir, batch_size, alpha, FLAGS):
         self.init_global_step()
         with tf.name_scope('labeled'):
             with tf.variable_scope('classifier'):
@@ -192,8 +195,8 @@ class SemiTABSA(BaseModel):
                 self.decoder_xa_l = self.decoder.create_placeholders('xa') #x is included since x is generated sequentially
                 self.decoder_y_l = self.decoder.create_placeholders('y')
                 self.decoder_hyper_l = self.decoder.create_placeholders('hyper')
-                decoder_loss_l, ppl_fw_l, ppl_bw_l, ppl_l = self.decoder.forward(self.decoder_xa_l, self.decoder_y_l, z_pst, self.decoder_hyper_l) #debug
-            elbo_l = encoder_loss_l * self.klw - decoder_loss_l - pri_loss_l #debug
+                decoder_loss_l, ppl_fw_l, ppl_bw_l, ppl_l = self.decoder.forward(self.decoder_xa_l, self.decoder_y_l, z_pst, self.decoder_hyper_l)
+            elbo_l = encoder_loss_l * self.klw + decoder_loss_l - pri_loss_l
 
         self.loss_l = elbo_l
         self.loss_c = classifier_loss_l
@@ -217,7 +220,7 @@ class SemiTABSA(BaseModel):
                 with tf.variable_scope('encoder', reuse=True):
                     _label = tf.gather(tf.eye(self.n_class), idx)
                     _label = tf.tile(_label[None, :], [batch_size, 1])
-                    _z_pst, _, _encoder_loss = self.encoder.forward(self.encoder_xa_u, {'y':_label}, self.decoder_hyper_u)
+                    _z_pst, _, _encoder_loss = self.encoder.forward(self.encoder_xa_u, {'y':_label}, self.encoder_hyper_u)
                     encoder_loss_u.append(_encoder_loss * self.klw)
                     _pri_loss_u = tf.log(tf.gather(self.pri_prob_y, idx))
             
@@ -232,14 +235,11 @@ class SemiTABSA(BaseModel):
         self.loss = tf.reduce_mean(self.loss_l + classifier_loss_l * alpha + self.loss_u)
         decoder_loss_l = tf.reduce_mean(decoder_loss_l)
 
-        vt = tf.trainable_variables()
-        for var in vt:
-            print(var.name)
-
         with tf.name_scope('train'):
             #optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(cost, global_step=self.global_step)
             optimizer = self.training_op(self.loss, tf.trainable_variables(), self.grad_clip, 20, self.learning_rate)
         
+        summary_kl = tf.summary.scalar('kl', tf.reduce_mean(encoder_loss_l))
         summary_loss = tf.summary.scalar('loss', self.loss)
         summary_loss_l = tf.summary.scalar('loss_l', tf.reduce_mean(self.loss_l))
         summary_loss_u = tf.summary.scalar('loss_u', tf.reduce_mean(self.loss_u))
@@ -255,15 +255,14 @@ class SemiTABSA(BaseModel):
         summary_ppl_test = tf.summary.scalar('test_ppl', test_ppl)
         test_summary_op = tf.summary.merge([summary_acc_test, summary_ppl_test])
 
-        import time, datetime
-        timestamp = str(int(time.time()))
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        logger = ExpLogger('semi_tabsa', save_dir)
+        logger.write_args(FLAGS)
+        logger.write_variables(tf.trainable_variables())
+        logger.file_copy(['semi_tabsa.py', 'encoder/*.py', 'decoder/*.py', 'classifier/*.py'])
 
-        _dir = save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(self.learning_rate) + '_l' + str(self.l2_reg) +\
-                '_alpha' + str(alpha) + '_batchsize' + str(self.batch_size)
-        train_summary_writer = tf.summary.FileWriter(_dir + '/train', sess.graph)
-        test_summary_writer = tf.summary.FileWriter(_dir + '/test', sess.graph)
-        validate_summary_writer = tf.summary.FileWriter(_dir + '/validate', sess.graph)
+        train_summary_writer = tf.summary.FileWriter(save_dir + '/train', sess.graph)
+        test_summary_writer = tf.summary.FileWriter(save_dir + '/test', sess.graph)
+        validate_summary_writer = tf.summary.FileWriter(save_dir + '/validate', sess.graph)
 
         sess.run(tf.global_variables_initializer())
 
@@ -310,7 +309,7 @@ class SemiTABSA(BaseModel):
                         keep_rate=keep_rate,
                         is_training=True)
                 
-                feed_dict_enc_u = get_feed_dict_help(plhs=[self.encoder_xa_u, self.encoder_hyper_l],
+                feed_dict_enc_u = get_feed_dict_help(plhs=[self.encoder_xa_u, self.encoder_hyper_u],
                         data_dict=self.encoder.prepare_data(samples),
                         keep_rate=keep_rate,
                         is_training=True)
@@ -327,11 +326,12 @@ class SemiTABSA(BaseModel):
                 feed_dict.update(feed_dict_clf_u)
                 feed_dict.update(feed_dict_enc_u)
                 feed_dict.update(feed_dict_dec_u)
-                feed_dict.update({self.klw: 0.001})
+                feed_dict.update({self.klw: 0.0001})
 
                 _, _acc, _loss, _ppl, _step, summary = sess.run([optimizer, classifier_acc_l, decoder_loss_l, ppl_l, self.global_step, train_summary_op], feed_dict=feed_dict)
                 train_summary_writer.add_summary(summary, _step)
-                #print(_acc, _loss, _ppl, _step)
+                if np.random.rand() < 1/4:
+                    print(_acc, _loss, _ppl, _step)
             
             acc, ppl, loss, cnt = 0., 0., 0., 0
             for samples, in test_data:
@@ -365,15 +365,15 @@ class SemiTABSA(BaseModel):
             #print(cnt)
             #print(acc)
             summary, _step = sess.run([test_summary_op, self.global_step], feed_dict={test_acc: acc/cnt, test_ppl: ppl/cnt})
-            print(summary, _step)
             test_summary_writer.add_summary(summary, _step)
-            print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(_step, loss / cnt, acc / cnt))
+            logger.info('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(_step, loss / cnt, acc / cnt))
+            print(save_dir)
             if acc / cnt > max_acc:
                 max_acc = acc / cnt
 
-        print('Optimization Finished! Max acc={}'.format(max_acc))
+        logger.info('Optimization Finished! Max acc={}'.format(max_acc))
 
-        print('Learning_rate={}, iter_num={}, hidden_num={}, l2={}'.format(
+        logger.info('Learning_rate={}, iter_num={}, hidden_num={}, l2={}'.format(
             self.learning_rate,
             n_iter,
             self.n_hidden,
@@ -381,10 +381,21 @@ class SemiTABSA(BaseModel):
         ))
 
 def main(_):
+    FLAGS = tf.app.flags.FLAGS
+
+    import time, datetime
+    timestamp = str(int(time.time()))
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    save_dir = FLAGS.save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(FLAGS.learning_rate) + '_l' + str(FLAGS.l2_reg)\
+                + '_alpha' + str(FLAGS.alpha) + '_batchsize' + str(FLAGS.batch_size) + '_hidae' + str(FLAGS.n_hidden_ae)\
+                + '_dimz' + str(FLAGS.dim_z)  + '_dec' + str(FLAGS.decoder_type) + '_unlabel' + str(FLAGS.n_unlabel)\
+                + '_vochas10kunl_addunkpd_noapconcattindec_kl1e-4_noh'
+    #save_dir = 'tmp'
+
     from src.io.batch_iterator import BatchIterator
-    train = pkl.load(open('../../../data/se2014task06/tabsa-rest/train.pkl', 'rb'), encoding='latin')
-    unlabel = pkl.load(open('../../../data/se2014task06/tabsa-rest/unlabel.clean.pkl', 'rb'), encoding='latin')[:500000]
-    test = pkl.load(open('../../../data/se2014task06/tabsa-rest/test.pkl', 'rb'), encoding='latin')
+    train = pkl.load(open(FLAGS.train_file_path, 'rb'), encoding='latin')
+    unlabel = pkl.load(open(FLAGS.unlabel_file_path, 'rb'), encoding='latin')[:FLAGS.n_unlabel]
+    test = pkl.load(open(FLAGS.test_file_path, 'rb'), encoding='latin')
 
     def get_y(samples):
         y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
@@ -393,17 +404,15 @@ def main(_):
 
     y = get_y(train)
     pri_prob_y = (np.sum(y, axis=0)/len(y)).astype('float32')
+    #pri_prob_y = np.ones(FLAGS.n_class).astype('float32')/FLAGS.n_class
     print(pri_prob_y)
     
-    fns = ['../../../data/se2014task06/tabsa-rest/train.pkl',
-            '../../../data/se2014task06/tabsa-rest/dev.pkl',
-            '../../../data/se2014task06/tabsa-rest/test.pkl',]
+    fns = [FLAGS.train_file_path, FLAGS.unlabel_file_path, FLAGS.test_file_path]
 
-    data_dir = '0617'
-    #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
+    data_dir = 'unlabel10k'
     word2idx, embedding = preprocess_data(fns, '../../../data/glove.6B/glove.6B.300d.txt', data_dir)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
-    unlabel_it = BatchIterator(len(train), FLAGS.batch_size, [unlabel], testing=False)
+    unlabel_it = BatchIterator(len(unlabel), FLAGS.batch_size, [unlabel], testing=False)
     test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=False)
 
     configproto = tf.ConfigProto()
@@ -424,31 +433,35 @@ def main(_):
                 dim_z=FLAGS.dim_z,
                 pri_prob_y=pri_prob_y,
                 decoder_type=FLAGS.decoder_type,
-                network_type=FLAGS.network_type,
-                grad_clip=FLAGS.grad_clip,)
+                grad_clip=FLAGS.grad_clip,
+                n_hidden_ae=FLAGS.n_hidden_ae,
+                )
 
-        model.run(sess, train_it, unlabel_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.', FLAGS.batch_size, FLAGS.alpha)
+        model.run(sess, train_it, unlabel_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, save_dir, FLAGS.batch_size, FLAGS.alpha, vars(FLAGS)['__flags'])
 
 if __name__ == '__main__':
-    FLAGS = tf.app.flags.FLAGS
     tf.app.flags.DEFINE_integer('embedding_dim', 300, 'dimension of word embedding')
     tf.app.flags.DEFINE_integer('batch_size', 64, 'number of example per batch')
     tf.app.flags.DEFINE_integer('n_hidden', 200, 'number of hidden unit')
+    tf.app.flags.DEFINE_integer('n_hidden_ae', 100, 'number of hidden unit')
     tf.app.flags.DEFINE_float('learning_rate', 0.01, 'learning rate')
     tf.app.flags.DEFINE_integer('n_class', 3, 'number of distinct class')
     tf.app.flags.DEFINE_integer('max_sentence_len', 80, 'max number of tokens per sentence')
     tf.app.flags.DEFINE_float('l2_reg', 0.001, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
-    tf.app.flags.DEFINE_integer('n_iter', 200, 'number of train iter')
+    tf.app.flags.DEFINE_integer('n_iter', 50, 'number of train iter')
+    tf.app.flags.DEFINE_integer('n_unlabel', 10000, 'number of unlabeled')
     
-    tf.app.flags.DEFINE_string('train_file_path', 'data/twitter/train.raw', 'training file')
-    tf.app.flags.DEFINE_string('validate_file_path', 'data/twitter/validate.raw', 'validating file')
-    tf.app.flags.DEFINE_string('test_file_path', 'data/twitter/test.raw', 'testing file')
-    tf.app.flags.DEFINE_string('network_type', 'TC', 'model type: ''(default), TD, TC or MEM')
+    tf.app.flags.DEFINE_string('train_file_path', '../../../data/se2014task06/tabsa-rest/train.pkl', 'training file')
+    tf.app.flags.DEFINE_string('unlabel_file_path', '../../../data/se2014task06/tabsa-rest/unlabel.clean.pkl', 'training file')
+    tf.app.flags.DEFINE_string('validate_file_path', '../../../data/se2014task06/tabsa-rest/dev.pkl', 'training file')
+    tf.app.flags.DEFINE_string('test_file_path', '../../../data/se2014task06/tabsa-rest/test.pkl', 'training file')
+    tf.app.flags.DEFINE_string('type', 'TC', 'model type: ''(default), TD or TC')
     tf.app.flags.DEFINE_float('keep_rate', 0.5, 'keep rate')
     tf.app.flags.DEFINE_string('decoder_type', 'lstm', '[sclstm, lstm]')
     tf.app.flags.DEFINE_float('grad_clip', 5, 'gradient_clip, <0 == None')
-    tf.app.flags.DEFINE_integer('dim_z', 100, 'dimension of z latent variable')
+    tf.app.flags.DEFINE_integer('dim_z', 50, 'dimension of z latent variable')
     tf.app.flags.DEFINE_float('alpha', 5.0, 'weight of alpha')
+    tf.app.flags.DEFINE_string('save_dir', '.', 'directory of save file')
 
     tf.app.run()

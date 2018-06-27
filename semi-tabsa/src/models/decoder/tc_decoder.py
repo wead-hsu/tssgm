@@ -95,7 +95,7 @@ class TCDecoder(BaseModel):
         if embedding is None:
             logger.info('No embedding is given, initialized randomly')
             wemb_init = np.random.randn([len(word2idx), embedding_dim]) * 1e-2
-            self.embedding = tf.get_variable('embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(embedding))
+            self.embedding = tf.get_variable('embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(wemb_init))
         elif isinstance(embedding, np.ndarray):
             logger.info('Numerical embedding is given with shape {}'.format(str(embedding.shape)))
             self.embedding = tf.constant(embedding, name='embedding')
@@ -104,7 +104,6 @@ class TCDecoder(BaseModel):
             self.embedding = embedding
         else:
             raise Exception('Embedding type {} is not supported'.format(type(embedding)))
-
 
     def create_placeholders(self, tag):
         with tf.name_scope('inputs'):
@@ -143,6 +142,19 @@ class TCDecoder(BaseModel):
                     sequence_length=tf.to_int32(tf.reduce_sum(mask, axis=1)),
                     initial_state=tf.contrib.rnn.LSTMStateTuple(init_state, init_state)
                     )
+        elif self.decoder_type.lower() == 'gelstm':
+            logger.info('Using LSTM as the decoder')
+            cell = tf.contrib.rnn.LSTMCell(self.n_hidden, state_is_tuple=True, cell_clip=self.grad_clip)
+
+            dec_outs, _ = tf.nn.dynamic_rnn(
+                    cell=cell,
+                    inputs=emb_inp,
+                    sequence_length=tf.to_int32(tf.reduce_sum(mask, axis=1)),
+                    initial_state=tf.contrib.rnn.LSTMStateTuple(init_state, init_state)
+                    )
+
+            y_inp = tf.tile(y[:, None, :], [1, tf.shape(emb_inp)[1], 1])
+            dec_outs = tf.concat([dec_outs, y_inp], axis=2)
         else:
             raise Exception('Decoder type {} is not supported'.format(self.decoder_type))
 
@@ -188,12 +200,14 @@ class TCDecoder(BaseModel):
 
             inputs_fw = tf.nn.embedding_lookup(self.embedding, xa_inputs['x_fw'])
             inputs_bw = tf.nn.embedding_lookup(self.embedding, xa_inputs['x_bw'])
-            inputs_fw = tf.concat([tf.zeros([batch_size, 1, self.embedding_dim]), inputs_fw[:, :-1, :]], axis=1)
-            inputs_bw = tf.concat([tf.zeros([batch_size, 1, self.embedding_dim]), inputs_bw[:, :-1:,:]], axis=1)
             target = tf.reduce_mean(tf.nn.embedding_lookup(self.embedding, xa_inputs['target_words']), 1, keep_dims=True)
-            target = tf.zeros([batch_size, self.max_sentence_len, self.embedding_dim]) + target
-            inputs_fw = tf.concat([inputs_fw, target], 2)
-            inputs_bw = tf.concat([inputs_bw, target], 2)
+            inputs_fw = tf.concat([target, inputs_fw[:, :-1, :]], axis=1)
+            inputs_bw = tf.concat([target, inputs_bw[:, :-1:,:]], axis=1)
+            #inputs_fw = tf.concat([tf.zeros([batch_size, 1, self.embedding_dim]), inputs_fw[:, :-1, :]], axis=1)
+            #inputs_bw = tf.concat([tf.zeros([batch_size, 1, self.embedding_dim]), inputs_bw[:, :-1:,:]], axis=1)
+            #target = tf.zeros([batch_size, self.max_sentence_len, self.embedding_dim]) + target
+            #inputs_fw = tf.concat([inputs_fw, target], 2)
+            #inputs_bw = tf.concat([inputs_bw, target], 2)
             
             with tf.variable_scope('forward_lstm'):
                 mask = tf.to_float(tf.sequence_mask(xa_inputs['sen_len_fw'], tf.shape(inputs_fw)[1]))
@@ -322,11 +336,13 @@ class TCDecoder(BaseModel):
                     flag = False
                     continue
                 if flag:
-                    if word in word_to_id:
-                        words_l.append(word_to_id[word])
+                    #if word in word_to_id:
+                        #words_l.append(word_to_id[word])
+                    words_l.append(word_to_id.get(word, word_to_id[UNK_TOKEN]))
                 else:
-                    if word in word_to_id:
-                        words_r.append(word_to_id[word])
+                    #if word in word_to_id:
+                        #words_r.append(word_to_id[word])
+                    words_r.append(word_to_id.get(word, word_to_id[UNK_TOKEN]))
             type_ = 'TC'
             if type_ == 'TD' or type_ == 'TC':
                 words_l.extend(target_word)
@@ -387,7 +403,7 @@ def main(_):
 if __name__ == '__main__':
     FLAGS = tf.app.flags.FLAGS
     tf.app.flags.DEFINE_integer('embedding_dim', 300, 'dimension of word embedding')
-    tf.app.flags.DEFINE_integer('batch_size', 64, 'number of example per batch')
+    tf.app.flags.DEFINE_integer('batch_size', 20, 'number of example per batch')
     tf.app.flags.DEFINE_integer('n_hidden', 200, 'number of hidden unit')
     tf.app.flags.DEFINE_float('learning_rate', 0.01, 'learning rate')
     tf.app.flags.DEFINE_integer('n_class', 3, 'number of distinct class')
