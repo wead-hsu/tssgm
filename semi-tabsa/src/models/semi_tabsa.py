@@ -4,6 +4,7 @@ sys.path.append('../../')
 import tensorflow as tf
 from src.models.base_model import BaseModel
 from src.models.classifier.tc_classifier import TCClassifier
+#from src.models.classifier.mem_classifier import MEMClassifier
 from src.models.encoder.tc_encoder import TCEncoder
 from src.models.decoder.tc_decoder import TCDecoder
 from src.io.exp_logger import ExpLogger
@@ -12,7 +13,7 @@ import numpy as np
 import os
 import logging
 from collections import Counter
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,7 @@ class SemiTABSA(BaseModel):
         self.word2idx = word2idx
         self.dim_z = dim_z
         self.decoder_type = decoder_type
+        self.network_type = network_type
         self.grad_clip = grad_clip
         self.n_hidden_ae = n_hidden_ae
         self.pri_prob_y = tf.Variable(pri_prob_y, trainable=False)
@@ -129,17 +131,25 @@ class SemiTABSA(BaseModel):
         else:
             raise Exception('Embedding type {} is not supported'.format(type(embedding)))
 
+        #TODO: Take the network graph building codes to a new module. 
+        #self.classifier = self.create_classifier(self.network_type)
         with tf.variable_scope('classifier'):
-            self.classifier = TCClassifier(word2idx=word2idx, 
-                    embedding_dim=embedding_dim, 
-                    n_hidden=n_hidden, 
-                    learning_rate=learning_rate, 
-                    n_class=n_class, 
-                    max_sentence_len=max_sentence_len, 
-                    l2_reg=l2_reg, 
-                    embedding=self.embedding,
-                    grad_clip=self.grad_clip,
-                    )
+            if self.network_type == "TC":
+                self.classifier = TCClassifier(word2idx=word2idx, 
+                        embedding_dim=embedding_dim, 
+                        n_hidden=n_hidden, 
+                        learning_rate=learning_rate, 
+                        n_class=n_class, 
+                        max_sentence_len=max_sentence_len, 
+                        l2_reg=l2_reg, 
+                        embedding=self.embedding,
+                        grad_clip=self.grad_clip,
+                        )
+            elif self.network_type == "TD":
+                pass
+            elif self.network_type == "MEM":
+            #TODO: Add hyper-params Config.py
+                 self.classifier = MEMClassifier()
         
         with tf.variable_scope('encoder'):
             self.encoder = TCEncoder(word2idx=word2idx, 
@@ -227,7 +237,7 @@ class SemiTABSA(BaseModel):
                     _decoder_loss, _, _, _ = self.decoder.forward(self.decoder_xa_u, {'y':_label}, _z_pst, self.decoder_hyper_u)
                     decoder_loss_u.append(_decoder_loss)
 
-                _elbo_u = _encoder_loss * self.klw + _decoder_loss - _pri_loss_u
+                _elbo_u = _encoder_loss * self.klw + _decoder_loss# - _pri_loss_u
                 elbo_u.append(_elbo_u)
 
         self.loss_u = tf.add_n([elbo_u[idx] * predict_u[:, idx] for idx in range(self.n_class)]) + classifier_entropy_u
@@ -465,7 +475,7 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_string('test_file_path', '../../../data/se2014task06/tabsa-rest/test.pkl', 'training file')
     tf.app.flags.DEFINE_string('type', 'TC', 'model type: ''(default), TD or TC')
     tf.app.flags.DEFINE_float('keep_rate', 0.5, 'keep rate')
-    tf.app.flags.DEFINE_string('decoder_type', 'sclstm', '[sclstm, lstm]')
+    tf.app.flags.DEFINE_string('decoder_type', 'lstm', '[sclstm, lstm]')
     tf.app.flags.DEFINE_float('grad_clip', 5, 'gradient_clip, <0 == None')
     tf.app.flags.DEFINE_integer('dim_z', 50, 'dimension of z latent variable')
     tf.app.flags.DEFINE_float('alpha', 5.0, 'weight of alpha')
