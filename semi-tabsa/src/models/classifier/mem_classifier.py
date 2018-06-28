@@ -210,13 +210,13 @@ class MEMClassifier(BaseModel):
     def create_placeholders(self, tag):
         with tf.name_scope('inputs'):
             plhs = dict()
-            if tag == 'mem_inputs':
+            if tag == 'xa':
                 plhs['input'] = tf.placeholder(tf.int32, [self.batch_size, 1], name="input")
                 plhs['time'] = tf.placeholder(tf.int32, [None, self.mem_size], name="time")
-                plhs['target'] = tf.placeholder(tf.int64, [self.batch_size], name="target")
+                #plhs['target'] = tf.placeholder(tf.int64, [self.batch_size], name="target")
                 plhs["context"] = tf.placeholder(tf.int32, [self.batch_size, self.mem_size], name="context")
                 plhs["mask"] = tf.placeholder(tf.float32, [self.batch_size, self.mem_size], name="mask")
-                plhs["neg_inf"] = tf.fill([self.batch_size, self.mem_size], -1*np.inf, name="neg_inf")
+                #plhs["neg_inf"] = tf.fill([self.batch_size, self.mem_size], -1*np.inf, name="neg_inf")
             elif tag == 'y':
                 plhs['y'] = tf.placeholder(tf.int64, [self.batch_size], name="y")
             elif tag == 'hyper':
@@ -225,7 +225,7 @@ class MEMClassifier(BaseModel):
                 raise Exception('{} is not supported in create_placeholders'.format(tag))   
         return plhs
 
-    def forward(self, mem_inputs):
+    def forward(self, mem_inputs, hyper_inputs):
         with tf.name_scope('forward'):
             self.build_memory(mem_inputs)
             self.W = tf.Variable(tf.random_uniform([self.edim, 3], minval=-0.01, maxval=0.01))
@@ -233,17 +233,26 @@ class MEMClassifier(BaseModel):
             #logits = self.z
         return self.z
 
+    def get_loss(self, logits, y_inputs, pri_prob_y):
+        #y = tf.argmax(y_inputs['y'], axis=1)
+        y = y_inputs['y']
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
+        pri_loss = tf.log(tf.gather(pri_prob_y, y))
+        correct_pred = tf.equal(tf.argmax(logits, axis=1), y)
+        acc = tf.reduce_mean(tf.to_float(correct_pred))
+        return loss, acc, pri_loss
         
     def run(self, sess, train_data, test_data, n_iter, keep_rate, save_dir):
         
         #self.init_global_step()
         self.global_step = tf.Variable(0, name="global_step")
-        input_placeholders = self.create_placeholders('mem_inputs')
-        print("place_holders:" + str(input_placeholders))
+        mem_inputs = self.create_placeholders('xa')
+        hyper_inputs = self.create_placeholders('hyper')
+        print("place_holders:" + str(mem_inputs))
         #y = self.create_placeholders['y']['y']
         self.y = tf.placeholder(tf.int64, [self.batch_size], name="y")
         
-        logits = self.forward(input_placeholders)
+        logits = self.forward(mem_inputs, hyper_inputs )
 
         
         params = [self.A, self.C, self.C_B, self.W, self.BL_W, self.BL_B]
@@ -291,45 +300,25 @@ class MEMClassifier(BaseModel):
         # fetch and feed #
         ##################
         def fetch_results(data, test=False):
-            source_data, source_loc_data, target_data, target_label = self.prepare_data(data)
-            x = np.ndarray([self.batch_size, 1], dtype=np.int32)
-            time = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
-            target = np.zeros([self.batch_size], dtype=np.int32) 
-            context = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
-            mask = np.ndarray([self.batch_size, self.mem_size])
-          
-        
-            context.fill(self.pad_idx)
-            time.fill(self.mem_size)
-            target.fill(0)
-            mask.fill(-1.0*np.inf)
-
-
-            for b in range(self.batch_size):
-                 x[b][0] = target_data[b]
-                 target[b] = target_label[b]
-                 time[b,:len(source_loc_data[b])] = source_loc_data[b]
-                 context[b,:len(source_data[b])] = source_data[b]
-                 mask[b,:len(source_data[b])].fill(0)
-                 #cur = cur + 1
+            data_dict = self.prepare_data(data)
             if not test:
                 logits, _, loss, self.step, summary_op = sess.run([ self.z, self.optim,
                                                    self.loss,
                                                    self.global_step,
 						   train_summary_op],
                                                    feed_dict={
-                                                   self.input: x,
-                                                   self.y: target,
-                                                   self.context: context,
-                                                   self.mask: mask})
+                                                   self.input: data_dict['input'],
+                                                   self.y: data_dict['y'],
+                                                   self.context: data_dict['context'],
+                                                   self.mask: data_dict['mask']})
                 return logits, loss, self.step, summary_op
     
             if test:
                 #raw_labels = []
-                logits, loss, correct_pred, summary = sess.run([self.z, self.loss, self.correct_pred, test_summary_op], feed_dict={self.input: x,
-                                                             self.y: target,
-                                                             self.context: context,
-                                                             self.mask: mask})
+                logits, loss, correct_pred, summary = sess.run([self.z, self.loss, self.correct_pred, test_summary_op], feed_dict={self.input: data_dict['input'],
+                                                             self.y: data_dict['y'],
+                                                             self.context:data_dict['context'],
+                                                             self.mask: data_dict['mask']})
                 #for b in range(self.batch_size):
                 #    if raw_labels[b] == prediction[b]:
                 #        acc += 1
@@ -343,8 +332,8 @@ class MEMClassifier(BaseModel):
                num = len(samples)
                logits, loss, step, summary = fetch_results(samples)
                train_summary_writer.add_summary(summary, step)
-               _, _, _, gt = self.prepare_data(samples)
-               train_acc += np.sum(np.argmax(logits,1) == gt)
+               data_dict = self.prepare_data(samples)
+               train_acc += np.sum(np.argmax(logits,1) == data_dict['y'])
                train_loss += loss * num
                train_cnt += num
             train_loss /= train_cnt
@@ -367,12 +356,21 @@ class MEMClassifier(BaseModel):
         sentence_len = self.mem_size
         sent_word2idx = self.word2idx
         target_word2idx = self.target2idx
-        sentence_list = []
-        location_list = []
-        target_list = []
-        polarity_list = []
+        for k,v in sent_word2idx.items():
+            if k == "bed":
+                print(k,v)
+        x = np.ndarray([self.batch_size, 1], dtype=np.int32)
+        time = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
+        y = np.zeros([self.batch_size], dtype=np.int32) 
+        context = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
+        mask = np.ndarray([self.batch_size, self.mem_size])
         
-        for sample in samples:
+        context.fill(self.pad_idx)
+        time.fill(self.mem_size)
+        y.fill(0)
+        mask.fill(-1.0*np.inf)
+        
+        for b, sample in enumerate(samples):
             # Get the segmented sentence list.
             words = []
             has_target = False
@@ -386,7 +384,7 @@ class MEMClassifier(BaseModel):
             # Get the segmented target list. 
             target_word = [sample['tokens'][i] for i, _ in enumerate(sample['tokens']) if sample['tags'][i] != 'O']
             # Get the polarity symbol.
-            y_dict = {'positive': 1, 'negative': 2, 'neutral': 0}
+            y_dict = {'positive': 0, 'negative': 1, 'neutral': 2}
             polarity = y_dict[sample.get('polarity','positive')]
 
             sentence = " ".join(words).lower()
@@ -409,7 +407,7 @@ class MEMClassifier(BaseModel):
                 try:
                     word_index = sent_word2idx[word]
                 except:
-                    print("id not found for word in the sentence")
+                    print("id not found for %s in the sentence" %word)
                     exit()
                 
                 location_info = abs(index - target_location)
@@ -430,21 +428,21 @@ class MEMClassifier(BaseModel):
                 print("id not found for target")
                 exit()
 
-	    #Mem_ABSA data load code
-            #if not is_included_flag:
-            #    print(sentence)
-            #    continue
 
-            sentence_list.append(id_tokenised_sentence)
-            location_list.append(location_tokenised_sentence)
-            target_list.append(target_index)
-            polarity_list.append(polarity)
-        #print(sentence_list[:10])
-        #print(location_list[:10])
-        #print(target_list[:10])
-        #print(polarity_list[:10])
-        #print()
-        return sentence_list, location_list, target_list, polarity_list
+            x[b][0] = target_index  
+            y[b] = polarity
+            time[b,:len(location_tokenised_sentence)]=location_tokenised_sentence
+            context[b,:len(id_tokenised_sentence)] = id_tokenised_sentence
+            mask[b,:len(id_tokenised_sentence)].fill(0)
+
+
+        return {'input': x,
+                'context': context, 
+                'time': time, 
+                'mask':mask,
+                'y':y
+               }
+        #return sentence_list, location_list, target_list, polarity_list
 
     
 def main(_):
