@@ -95,7 +95,7 @@ def load_data(data_dir):
     return word2idx, embedding
 
 class SemiTABSA(BaseModel):
-    def __init__(self, word2idx, embedding_dim, batch_size, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, pri_prob_y, decoder_type, grad_clip, n_hidden_ae, position_enc, bidirection_enc, position_dec, bidirection_dec):
+    def __init__(self, word2idx, embedding_dim, batch_size, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, pri_prob_y, decoder_type, grad_clip, n_hidden_ae, position_enc, bidirection_enc, position_dec, bidirection_dec, classifier_type):
         super(SemiTABSA, self).__init__()
 
         self.embedding_dim = embedding_dim
@@ -108,7 +108,7 @@ class SemiTABSA(BaseModel):
         self.word2idx = word2idx
         self.dim_z = dim_z
         self.decoder_type = decoder_type
-        self.network_type = network_type
+        self.classifier_type = classifier_type
         self.grad_clip = grad_clip
         self.n_hidden_ae = n_hidden_ae
         self.pri_prob_y = tf.Variable(pri_prob_y, trainable=False)
@@ -132,9 +132,9 @@ class SemiTABSA(BaseModel):
             raise Exception('Embedding type {} is not supported'.format(type(embedding)))
 
         #TODO: Take the network graph building codes to a new module. 
-        #self.classifier = self.create_classifier(self.network_type)
+        #self.classifier = self.create_classifier(self.classifier_type)
         with tf.variable_scope('classifier'):
-            if self.network_type == "TC":
+            if self.classifier_type == "TC":
                 self.classifier = TCClassifier(word2idx=word2idx, 
                         embedding_dim=embedding_dim, 
                         n_hidden=n_hidden, 
@@ -145,9 +145,9 @@ class SemiTABSA(BaseModel):
                         embedding=self.embedding,
                         grad_clip=self.grad_clip,
                         )
-            elif self.network_type == "TD":
+            elif self.classifier_type == "TD":
                 pass
-            elif self.network_type == "MEM":
+            elif self.classifier_type == "MEM":
             #TODO: Add hyper-params Config.py
                  self.classifier = MEMClassifier()
         
@@ -452,6 +452,7 @@ def main(_):
                 bidirection_enc=FLAGS.bidirection_enc,
                 position_dec=FLAGS.position_dec,
                 bidirection_dec=FLAGS.bidirection_dec,
+                classifier_type=FLAGS.classifier_type,
                 )
 
         model.run(sess, train_it, unlabel_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, save_dir, FLAGS.batch_size, FLAGS.alpha, vars(FLAGS)['__flags'])
@@ -473,7 +474,7 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_string('unlabel_file_path', '../../../data/se2014task06/tabsa-rest/unlabel.clean.pkl', 'training file')
     tf.app.flags.DEFINE_string('validate_file_path', '../../../data/se2014task06/tabsa-rest/dev.pkl', 'training file')
     tf.app.flags.DEFINE_string('test_file_path', '../../../data/se2014task06/tabsa-rest/test.pkl', 'training file')
-    tf.app.flags.DEFINE_string('type', 'TC', 'model type: ''(default), TD or TC')
+    tf.app.flags.DEFINE_string('classifier_type', 'TC', 'model type: ''(default), TD or TC')
     tf.app.flags.DEFINE_float('keep_rate', 0.5, 'keep rate')
     tf.app.flags.DEFINE_string('decoder_type', 'lstm', '[sclstm, lstm]')
     tf.app.flags.DEFINE_float('grad_clip', 5, 'gradient_clip, <0 == None')

@@ -149,7 +149,7 @@ class TCDecoder(BaseModel):
         return plhs
 
     def fill_blank(self, mask):
-        idx = tf.argmax(mask)
+        idx = tf.argmax(mask, axis=1)
         fill_mat = tf.convert_to_tensor(np.tri(self.max_sentence_len, k=-1).astype('float32'))
         fill = tf.gather(fill_mat, idx)
         return mask + fill
