@@ -95,7 +95,7 @@ class TCClassifier(BaseModel):
         elif isinstance(embedding, np.ndarray):
             logger.info('Numerical embedding is given with shape {}'.format(str(embedding.shape)))
             self.embedding = tf.constant(embedding, name='embedding')
-        elif isinstance(embedding, tf.Tensor):
+        elif isinstance(embedding, tf.Tensor) or isinstance(embedding, tf.Variable):
             logger.info('Import tensor as the embedding: '.format(embedding.name))
             self.embedding = embedding
         else:

@@ -94,7 +94,7 @@ def load_data(data_dir):
     return word2idx, embedding
 
 class SemiTABSA(BaseModel):
-    def __init__(self, word2idx, embedding_dim, batch_size, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, pri_prob_y, decoder_type, grad_clip, n_hidden_ae):
+    def __init__(self, word2idx, embedding_dim, batch_size, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, pri_prob_y, decoder_type, grad_clip, n_hidden_ae, position_enc, bidirection_enc, position_dec, bidirection_dec):
         super(SemiTABSA, self).__init__()
 
         self.embedding_dim = embedding_dim
@@ -110,15 +110,20 @@ class SemiTABSA(BaseModel):
         self.grad_clip = grad_clip
         self.n_hidden_ae = n_hidden_ae
         self.pri_prob_y = tf.Variable(pri_prob_y, trainable=False)
+        self.position_enc = position_enc
+        self.bidirection_enc = bidirection_enc
+        self.position_dec = position_dec
+        self.bidirection_dec = bidirection_dec
 
         if embedding is None:
             logger.info('No embedding is given, initialized randomly')
             wemb_init = np.random.randn([len(word2idx), embedding_dim]) * 1e-2
-            self.embedding = tf.get_variable('embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(embedding))
+            self.embedding = tf.get_variable('embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(wemb_init))
         elif isinstance(embedding, np.ndarray):
             logger.info('Numerical embedding is given with shape {}'.format(str(embedding.shape)))
-            self.embedding = tf.constant(embedding, name='embedding')
-        elif isinstance(embedding, tf.Tensor):
+            #self.embedding = tf.constant(embedding, name='embedding')
+            self.embedding = tf.get_variable('embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(embedding))
+        elif isinstance(embedding, tf.Tensor) or isinstance(embedding, tf.Variable):
             logger.info('Import tensor as the embedding: '.format(embedding.name))
             self.embedding = embedding
         else:
@@ -147,6 +152,8 @@ class SemiTABSA(BaseModel):
                     embedding=self.embedding,
                     dim_z=dim_z,
                     grad_clip=self.grad_clip,
+                    position=self.position_enc,
+                    bidirection=self.bidirection_enc,
                     )
         
         with tf.variable_scope('decoder'):
@@ -161,6 +168,8 @@ class SemiTABSA(BaseModel):
                     dim_z=dim_z,
                     decoder_type=self.decoder_type,
                     grad_clip=self.grad_clip,
+                    position=self.position_dec,
+                    bidirection=self.bidirection_dec,
                     )
 
         self.klw = tf.placeholder(tf.float32, [], 'klw')
@@ -372,6 +381,8 @@ class SemiTABSA(BaseModel):
 
 def main(_):
     FLAGS = tf.app.flags.FLAGS
+    FLAGS.bidirection_enc = True if FLAGS.bidirection_enc == 'True' else False
+    FLAGS.bidirection_dec = True if FLAGS.bidirection_dec == 'True' else False
 
     import time, datetime
     timestamp = str(int(time.time()))
@@ -379,7 +390,9 @@ def main(_):
     save_dir = FLAGS.save_dir + '/logs/' + str(timestamp) + '_' +  '_r' + str(FLAGS.learning_rate) + '_l' + str(FLAGS.l2_reg)\
                 + '_alpha' + str(FLAGS.alpha) + '_batchsize' + str(FLAGS.batch_size) + '_hidae' + str(FLAGS.n_hidden_ae)\
                 + '_dimz' + str(FLAGS.dim_z)  + '_dec' + str(FLAGS.decoder_type) + '_unlabel' + str(FLAGS.n_unlabel)\
-                + '_vochas10kunl_addunkpd_noapconcattindec_kl1e-4_noh'
+                + '_positionenc' + str(FLAGS.position_enc) + '_bidirectionenc' + str(FLAGS.bidirection_enc)\
+                + '_positiondec' + str(FLAGS.position_dec) + '_bidirectiondec' + str(FLAGS.bidirection_dec)\
+                + '_vochas10kunl_addunkpd_noapconcattindec_kl1e-4_noh_nofixemb'
     #save_dir = 'tmp'
 
     from src.io.batch_iterator import BatchIterator
@@ -410,7 +423,7 @@ def main(_):
     configproto.allow_soft_placement = True
     with tf.Session(config=configproto) as sess:
         tf.global_variables_initializer().run()
-
+        
         model = SemiTABSA(word2idx=word2idx, 
                 embedding_dim=FLAGS.embedding_dim, 
                 batch_size=FLAGS.batch_size, 
@@ -425,6 +438,10 @@ def main(_):
                 decoder_type=FLAGS.decoder_type,
                 grad_clip=FLAGS.grad_clip,
                 n_hidden_ae=FLAGS.n_hidden_ae,
+                position_enc=FLAGS.position_enc,
+                bidirection_enc=FLAGS.bidirection_enc,
+                position_dec=FLAGS.position_dec,
+                bidirection_dec=FLAGS.bidirection_dec,
                 )
 
         model.run(sess, train_it, unlabel_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, save_dir, FLAGS.batch_size, FLAGS.alpha, vars(FLAGS)['__flags'])
@@ -436,7 +453,7 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('n_hidden_ae', 100, 'number of hidden unit')
     tf.app.flags.DEFINE_float('learning_rate', 0.01, 'learning rate')
     tf.app.flags.DEFINE_integer('n_class', 3, 'number of distinct class')
-    tf.app.flags.DEFINE_integer('max_sentence_len', 80, 'max number of tokens per sentence')
+    tf.app.flags.DEFINE_integer('max_sentence_len', 85, 'max number of tokens per sentence')
     tf.app.flags.DEFINE_float('l2_reg', 0.001, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
     tf.app.flags.DEFINE_integer('n_iter', 50, 'number of train iter')
@@ -453,5 +470,9 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('dim_z', 50, 'dimension of z latent variable')
     tf.app.flags.DEFINE_float('alpha', 5.0, 'weight of alpha')
     tf.app.flags.DEFINE_string('save_dir', '.', 'directory of save file')
+    tf.app.flags.DEFINE_string('position_enc', 'distance', '[binary, distance, ], None for no position embedding')
+    tf.app.flags.DEFINE_string('bidirection_enc', 'True', 'boolean')
+    tf.app.flags.DEFINE_string('position_dec', 'distance', '[binary, distance, ], None for no position embedding')
+    tf.app.flags.DEFINE_string('bidirection_dec', 'True', 'boolean')
 
     tf.app.run()
