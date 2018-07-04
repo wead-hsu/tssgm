@@ -154,12 +154,14 @@ class MEMClassifier(BaseModel):
       self.context = mem_inputs['context']
       self.mask = mem_inputs['mask']
 
-      self.A = tf.Variable(tf.random_uniform([self.nwords, self.edim], minval=-0.01, maxval=0.01))
-      self.ASP = tf.Variable(tf.random_uniform([self.pre_trained_target_wt.shape[0], self.edim], minval=-0.01, maxval=0.01))
-      self.C = tf.Variable(tf.random_uniform([self.edim, self.edim], minval=-0.01, maxval=0.01))
-      self.C_B =tf.Variable(tf.random_uniform([1, self.edim], minval=-0.01, maxval=0.01))
-      self.BL_W = tf.Variable(tf.random_uniform([2 * self.edim, 1], minval=-0.01, maxval=0.01))
-      self.BL_B = tf.Variable(tf.random_uniform([1, 1], minval=-0.01, maxval=0.01))
+      #self.A = tf.get_variable("A", [self.nwords, self.edim], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
+      self.A = tf.get_variable("A", [self.nwords, self.edim], initializer=tf.constant_initializer(self.pre_trained_context_wt), trainable=False)
+      #self.ASP = tf.get_variable("ASP", [self.pre_trained_target_wt.shape[0], self.edim], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01), trainable=False)
+      self.ASP = tf.get_variable("ASP", [self.pre_trained_target_wt.shape[0], self.edim], initializer=tf.constant_initializer(self.pre_trained_target_wt), trainable=False)
+      self.C = tf.get_variable("C", [self.edim, self.edim], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
+      self.C_B = tf.get_variable("C_B", [1, self.edim], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
+      self.BL_W = tf.get_variable("BL_W", [2 * self.edim, 1], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
+      self.BL_B = tf.get_variable("BL_B", [1, 1], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
 
       
       self.Ain_c = tf.nn.embedding_lookup(self.A, self.context)
@@ -228,7 +230,7 @@ class MEMClassifier(BaseModel):
     def forward(self, mem_inputs, hyper_inputs):
         with tf.name_scope('forward'):
             self.build_memory(mem_inputs)
-            self.W = tf.Variable(tf.random_uniform([self.edim, 3], minval=-0.01, maxval=0.01))
+            self.W = tf.get_variable("W", [self.edim, 3], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
             self.z = tf.matmul(self.hid[-1], self.W)
             #logits = self.z
         return self.z
@@ -245,7 +247,7 @@ class MEMClassifier(BaseModel):
     def run(self, sess, train_data, test_data, n_iter, keep_rate, save_dir):
         
         #self.init_global_step()
-        self.global_step = tf.Variable(0, name="global_step")
+        self.global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
         mem_inputs = self.create_placeholders('xa')
         hyper_inputs = self.create_placeholders('hyper')
         print("place_holders:" + str(mem_inputs))
@@ -255,22 +257,25 @@ class MEMClassifier(BaseModel):
         logits = self.forward(mem_inputs, hyper_inputs )
 
         
-        params = [self.A, self.C, self.C_B, self.W, self.BL_W, self.BL_B]
+        params = [self.C, self.C_B, self.W, self.BL_W, self.BL_B]
         with tf.name_scope('loss'):
             #cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=self.target))
             self.loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=self.y)
             self.loss = tf.reduce_sum(self.loss) 
         with tf.name_scope('train'):
             #optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(cost, global_step=self.global_step)
-            self.lr = tf.Variable(self.init_lr)
+            self.lr = tf.Variable(self.init_lr, name="lr")
             self.opt = tf.train.AdagradOptimizer(self.lr)
             grads_and_vars = self.opt.compute_gradients(self.loss,params)
-            clipped_grads_and_vars = [(tf.clip_by_norm(gv[0], self.max_grad_norm), gv[1]) \
-                                    for gv in grads_and_vars]
+           # clipped_grads_and_vars = [(tf.clip_by_norm(gv[0], self.max_grad_norm), gv[1]) \
+           #                         for gv in grads_and_vars]
+            
+            clipped_grads, _ = tf.clip_by_global_norm([ gv[0] for gv in grads_and_vars], self.max_grad_norm)
         
             inc = self.global_step.assign_add(1)
             with tf.control_dependencies([inc]):
-                self.optim = self.opt.apply_gradients(clipped_grads_and_vars)
+                self.optim = self.opt.apply_gradients(zip(clipped_grads, [gv[1] for gv in grads_and_vars]))
+                #self.optim = self.opt.apply_gradients(clipped_grads_and_vars)
 
         with tf.name_scope('predict'):
             correct_pred = tf.equal(tf.argmax(logits, axis=1), self.y)
@@ -290,10 +295,9 @@ class MEMClassifier(BaseModel):
         train_summary_writer = tf.summary.FileWriter(_dir + '/train', sess.graph)
         test_summary_writer = tf.summary.FileWriter(_dir + '/test', sess.graph)
         validate_summary_writer = tf.summary.FileWriter(_dir + '/validate', sess.graph)
-        print(self.pre_trained_target_wt[:10])
         sess.run(tf.global_variables_initializer())
-        sess.run(self.A.assign(self.pre_trained_context_wt))
-        sess.run(self.ASP.assign(self.pre_trained_target_wt))
+        #sess.run(self.A.assign(self.pre_trained_context_wt))
+        #sess.run(self.ASP.assign(self.pre_trained_target_wt))
 
 
         ##################
@@ -315,7 +319,7 @@ class MEMClassifier(BaseModel):
     
             if test:
                 #raw_labels = []
-                logits, loss, correct_pred, summary = sess.run([self.z, self.loss, self.correct_pred, test_summary_op], feed_dict={self.input: data_dict['input'],
+                logits, loss, correct_pred, step, summary = sess.run([self.z, self.loss, self.correct_pred, self.global_step, test_summary_op], feed_dict={self.input: data_dict['input'],
                                                              self.y: data_dict['y'],
                                                              self.context:data_dict['context'],
                                                              self.mask: data_dict['mask']})
@@ -323,7 +327,7 @@ class MEMClassifier(BaseModel):
                 #    if raw_labels[b] == prediction[b]:
                 #        acc += 1
                 #print(np.sum(correct_pred))
-                return logits, loss, correct_pred, summary
+                return logits, loss, correct_pred, step, summary
 
         max_acc = 0.
         for i in range(n_iter):
@@ -341,7 +345,7 @@ class MEMClassifier(BaseModel):
             acc, loss, cnt = 0., 0., 0
             for samples, in test_data:
                 num = len(samples)
-                logits, _loss, correct_pred, summary = fetch_results(samples, test=True)
+                logits, _loss, correct_pred, step, summary = fetch_results(samples, test=True)
                 #acc += np.sum(np.argmax(logits,1) == d)
                 acc += correct_pred
                 loss += _loss * num 
@@ -356,9 +360,6 @@ class MEMClassifier(BaseModel):
         sentence_len = self.mem_size
         sent_word2idx = self.word2idx
         target_word2idx = self.target2idx
-        for k,v in sent_word2idx.items():
-            if k == "bed":
-                print(k,v)
         x = np.ndarray([self.batch_size, 1], dtype=np.int32)
         time = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
         y = np.zeros([self.batch_size], dtype=np.int32) 
@@ -405,7 +406,8 @@ class MEMClassifier(BaseModel):
                 if word == "$t$":
                     continue
                 try:
-                    word_index = sent_word2idx[word]
+                    word_index = sent_word2idx.get(word, sent_word2idx["$unk$"])
+                    #word_index = sent_word2idx[word]
                 except:
                     print("id not found for %s in the sentence" %word)
                     exit()
@@ -422,7 +424,8 @@ class MEMClassifier(BaseModel):
             #        is_included_flag = 1
             #    break
             try:
-                target_index = target_word2idx[target]
+                target_index = target_word2idx.get(target, target_word2idx["$unk$"])
+                #target_index = target_word2idx[target]
             except:
                 print(target)
                 print("id not found for target")
@@ -454,7 +457,7 @@ def main(_):
             '../../../../data/se2014task06/tabsa-rest/dev.pkl',
             '../../../../data/se2014task06/tabsa-rest/test.pkl',]
 
-    data_dir = '../0617'
+    data_dir = '../unlabel10k'
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
     word2idx, target2idx, word_embedding, target_embedding = preprocess_data(fns, '../../../../data/glove.6B/glove.6B.300d.txt', data_dir)
     word_embedding = np.concatenate([word_embedding, np.zeros([1, FLAGS.embedding_dim])])
@@ -462,32 +465,20 @@ def main(_):
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
     test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=False)
  
-    #train_data = get_dataset(train, source_word2idx, target_word2idx, embeddings)
-    #test_data = get_dataset(test, source_word2idx, target_word2idx, embeddings)
-
     configproto = tf.ConfigProto()
-    configproto.gpu_options.allow_growth = True
+    configproto.gpu_options.allow_growth = True 
     configproto.allow_soft_placement = True
     with tf.Session(config=configproto) as sess:
         tf.global_variables_initializer().run()
 
-        #model = MEMClassifier(word2idx=word2idx, 
-        #        embedding_dim=FLAGS.embedding_dim, 
-        #        n_hidden=FLAGS.n_hidden, 
-        #        learning_rate=FLAGS.learning_rate, 
-        #        n_class=FLAGS.n_class, 
-        #        max_sentence_len=FLAGS.max_sentence_len, 
-        #        l2_reg=FLAGS.l2_reg, 
-        #        embedding=embedding,
-        #        grad_clip=FLAGS.grad_clip)
-        model = MEMClassifier(nwords=len(word2idx)+1,
+        model = MEMClassifier(nwords=len(word2idx) + 1,
                   word2idx = word2idx,
                   target2idx = target2idx,
                   init_hid=0.1,
                   init_std=0.01,
                   init_lr=0.01,
                   batch_size=FLAGS.batch_size,
-                  nhop=9,
+                  nhop=3,
                   edim=FLAGS.embedding_dim,
                   mem_size=FLAGS.max_sentence_len,
                   lindim=300,
@@ -497,7 +488,7 @@ def main(_):
                   pre_trained_target_wt=target_embedding)
         logger.info(model)            
         model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, data_dir)
-        logger.info(model)            
+    #    logger.info(model)            
 	
 
 if __name__ == '__main__':
@@ -510,7 +501,7 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('max_sentence_len', 79, 'max number of tokens per sentence')
     tf.app.flags.DEFINE_float('l2_reg', 0.001, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
-    tf.app.flags.DEFINE_integer('n_iter', 200, 'number of train iter')
+    tf.app.flags.DEFINE_integer('n_iter', 50, 'number of train iter')
     
     tf.app.flags.DEFINE_string('train_file_path', 'data/twitter/train.raw', 'training file')
     tf.app.flags.DEFINE_string('validate_file_path', 'data/twitter/validate.raw', 'validating file')
