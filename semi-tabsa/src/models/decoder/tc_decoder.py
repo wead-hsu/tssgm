@@ -77,7 +77,7 @@ def load_data(data_dir):
     return word2idx, embedding
 
 class TCDecoder(BaseModel):
-    def __init__(self, word2idx, embedding_dim, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, decoder_type, grad_clip, position, bidirection):
+    def __init__(self, word2idx, embedding_dim, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, decoder_type, grad_clip, position, bidirection, sharefc=True):
         super(TCDecoder, self).__init__()
 
         self.embedding_dim = embedding_dim
@@ -93,6 +93,7 @@ class TCDecoder(BaseModel):
         self.grad_clip = grad_clip
         self.position = position
         self.bidirection = bidirection
+        self.sharefc = sharefc
 
         if embedding is None:
             logger.info('No embedding is given, initialized randomly')
@@ -114,10 +115,26 @@ class TCDecoder(BaseModel):
         elif self.position == 'distance':
             logger.info('Distance embedding is initialized and trainable')
             num_units = self.embedding_dim // 10
-            position_enc = np.array([[pos / np.power(10000, 2.*i/num_units) for i in range(num_units)] for pos in range(-self.max_sentence_len ,self.max_sentence_len)])
-            position_enc[:, 0::2] = np.sin(position_enc[:, 0::2])  # dim 2i
-            position_enc[:, 1::2] = np.cos(position_enc[:, 1::2])  # dim 2i+1
-            self.pos_embedding = tf.get_variable('pos_embedding', [2*self.max_sentence_len, embedding_dim/10], initializer=tf.constant_initializer(position_enc))
+            position_enc = np.zeros([2*self.max_sentence_len, num_units])
+            for i in range(-self.max_sentence_len, self.max_sentence_len):
+                for j in range(num_units):
+                    if j % 2 == 0:
+                        position_enc[i+self.max_sentence_len, j] = np.sin(i/np.power(10000, j/num_units))
+                    else:
+                        position_enc[i+self.max_sentence_len, j] = np.cos(i/np.power(10000, (j//2)*2/num_units))
+            self.pos_embedding = tf.get_variable('pos_embedding', [2*self.max_sentence_len, num_units], initializer=tf.constant_initializer(position_enc), trainable=False)
+        elif self.position == 'distance-add':
+            logger.info('Distance embedding is initialized and trainable')
+            num_units = self.embedding_dim
+            position_enc = np.zeros([2*self.max_sentence_len, num_units])
+            for i in range(-self.max_sentence_len, self.max_sentence_len):
+                for j in range(num_units):
+                    if j % 2 == 0:
+                        position_enc[i+self.max_sentence_len, j] = np.sin(i/np.power(10000, j/num_units))
+                    else:
+                        position_enc[i+self.max_sentence_len, j] = np.cos(i/np.power(10000, (j//2)*2/num_units))
+            self.pos_embedding = tf.get_variable('pos_embedding', [2*self.max_sentence_len, num_units], initializer=tf.constant_initializer(position_enc), trainable=False)
+
 
     def create_placeholders(self, tag):
         with tf.name_scope('inputs'):
@@ -129,14 +146,14 @@ class TCDecoder(BaseModel):
                     plhs['m_fw']         = tf.placeholder(tf.float32, [None, self.max_sentence_len], name='m_fw')
                     plhs['m_bw']         = tf.placeholder(tf.float32, [None, self.max_sentence_len], name='m_bw')
                     plhs['target_words'] = tf.placeholder(tf.int32, [None, 1], name='target_words')
-                    if self.position == 'binary' or self.position == 'distance':
+                    if self.position:
                         plhs['p_fw']     = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='p_fw')
                         plhs['p_bw']     = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='p_bw')
                 else:
                     plhs['x']            = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='x')
                     plhs['m']            = tf.placeholder(tf.float32, [None, self.max_sentence_len], name='m')
                     plhs['target_words'] = tf.placeholder(tf.int32, [None, 1], name='target_words')
-                    if self.position == 'binary' or self.position == 'distance':
+                    if self.position:
                         plhs['p']        = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='p')
 
             elif tag == 'y':
@@ -161,6 +178,9 @@ class TCDecoder(BaseModel):
         elif self.position == 'distance':
             inputs_pos = tf.nn.embedding_lookup(self.pos_embedding, p + self.max_sentence_len)
             inputs = tf.concat([inputs, inputs_pos], axis=2)
+        elif self.position == 'distance-add':
+            inputs_pos = tf.nn.embedding_lookup(self.pos_embedding, p + self.max_sentence_len)
+            inputs = inputs + inputs_pos
         return inputs
 
     def forward_rnn(self, emb_inp, raw_mask, init_state, y):
@@ -217,18 +237,32 @@ class TCDecoder(BaseModel):
 
         return dec_outs
 
-    def create_softmax_layer(self, logits, targets, weights):
+    def create_softmax_layer(self, logits, targets, weights, y):
         inp = logits
         w_t = tf.get_variable(
                 'proj_w', 
                 [self.vocab_size, int(logits.shape[-1])],
                 )
-        b = tf.get_variable(
-                "proj_b", 
-                [self.vocab_size,],
-                )
-        inp_flt = tf.reshape(inp, [-1, tf.shape(inp)[-1]])
-        logits_flt = tf.add(tf.matmul(inp_flt, w_t, transpose_b=True), b[None, :])
+
+        use_depb = False
+        if use_depb:
+            b = tf.get_variable(
+                    "proj_b", 
+                    [self.n_class, self.vocab_size],
+                    )
+            inp_flt = tf.reshape(inp, [-1, tf.shape(inp)[-1]])
+            b = tf.nn.embedding_lookup(b, tf.argmax(y, axis=1))
+            b = tf.tile(b[:, None, :], [1, tf.shape(inp)[1], 1])
+            b = tf.reshape(b, [-1, self.vocab_size])
+            logits_flt = tf.add(tf.matmul(inp_flt, w_t, transpose_b=True), b)
+        else:
+            b = tf.get_variable(
+                    "prob_b",
+                    [self.vocab_size],
+                    )
+            inp_flt = tf.reshape(inp, [-1, tf.shape(inp)[-1]])
+            logits_flt = tf.add(tf.matmul(inp_flt, w_t, transpose_b=True), b[None, :])
+
         logits = tf.reshape(logits_flt, [tf.shape(inp_flt)[0], -1, self.vocab_size])
 
         llh_precise = tf.contrib.seq2seq.sequence_loss(
@@ -269,7 +303,7 @@ class TCDecoder(BaseModel):
             with tf.variable_scope('lstm'):
                 outs  = self.forward_rnn(inputs, xa_inputs['m'], yz, y_inputs['y'])
                 outs = tf.nn.dropout(outs, hyper_inputs['keep_rate'])
-                recons_loss = self.create_softmax_layer(outs, xa_inputs['x'], xa_inputs['m']) * xa_inputs['m']
+                recons_loss = self.create_softmax_layer(outs, xa_inputs['x'], xa_inputs['m'], y_inputs['y']) * xa_inputs['m']
                 recons_loss = tf.reduce_sum(recons_loss, axis=1)
 
             ppl = tf.exp(tf.reduce_sum(recons_loss) / (tf.to_float(tf.reduce_sum(xa_inputs['m'])) + 1e-3))
@@ -303,17 +337,27 @@ class TCDecoder(BaseModel):
             
             with tf.variable_scope('forward_lstm'):
                 #mask = tf.to_float(tf.sequence_mask(xa_inputs['sen_len_fw'], tf.shape(inputs_fw)[1]))
-                outs = self.forward_rnn(inputs_fw, xa_inputs['m_fw'], yz, y_inputs['y'])
-                outs = tf.nn.dropout(outs, hyper_inputs['keep_rate'])
-                recons_loss_fw = self.create_softmax_layer(outs, xa_inputs['x_fw'], xa_inputs['m_fw']) * xa_inputs['m_fw']
-                recons_loss_fw = tf.reduce_sum(recons_loss_fw, axis=1)
-
+                outs_fw = self.forward_rnn(inputs_fw, xa_inputs['m_fw'], yz, y_inputs['y'])
+                outs_fw = tf.nn.dropout(outs_fw, hyper_inputs['keep_rate'])
             with tf.variable_scope('backward_lstm'):
                 #mask = tf.to_float(tf.sequence_mask(xa_inputs['sen_len_bw'], tf.shape(inputs_bw)[1]))
-                outs = self.forward_rnn(inputs_bw, xa_inputs['m_bw'], yz, y_inputs['y'])
-                outs = tf.nn.dropout(outs, hyper_inputs['keep_rate'])
-                recons_loss_bw = self.create_softmax_layer(outs, xa_inputs['x_bw'], xa_inputs['m_bw']) * xa_inputs['m_bw']
-                recons_loss_bw = tf.reduce_sum(recons_loss_bw, axis=1)
+                outs_bw = self.forward_rnn(inputs_bw, xa_inputs['m_bw'], yz, y_inputs['y'])
+                outs_bw = tf.nn.dropout(outs_bw, hyper_inputs['keep_rate'])
+            
+            if self.sharefc:
+                with tf.variable_scope('softmax'):
+                    recons_loss_fw = self.create_softmax_layer(outs_fw, xa_inputs['x_fw'], xa_inputs['m_fw'], y_inputs['y']) * xa_inputs['m_fw']
+                    recons_loss_fw = tf.reduce_sum(recons_loss_fw, axis=1)
+                with tf.variable_scope('softmax', reuse=True):
+                    recons_loss_bw = self.create_softmax_layer(outs_bw, xa_inputs['x_bw'], xa_inputs['m_bw'], y_inputs['y']) * xa_inputs['m_bw']
+                    recons_loss_bw = tf.reduce_sum(recons_loss_bw, axis=1)
+            else:
+                with tf.variable_scope('softmax_fw'):
+                    recons_loss_fw = self.create_softmax_layer(outs_fw, xa_inputs['x_fw'], xa_inputs['m_fw'], y_inputs['y']) * xa_inputs['m_fw']
+                    recons_loss_fw = tf.reduce_sum(recons_loss_fw, axis=1)
+                with tf.variable_scope('softmax_bw'):
+                    recons_loss_bw = self.create_softmax_layer(outs_bw, xa_inputs['x_bw'], xa_inputs['m_bw'], y_inputs['y']) * xa_inputs['m_bw']
+                    recons_loss_bw = tf.reduce_sum(recons_loss_bw, axis=1)
 
             recons_loss = recons_loss_fw + recons_loss_bw
             ppl_fw = tf.exp(tf.reduce_sum(recons_loss_fw) / (tf.to_float(tf.reduce_sum(xa_inputs['m_fw'])) + 1e-3))
@@ -438,7 +482,7 @@ class TCDecoder(BaseModel):
                     _p = [1] * len(target_word) + [0] * (self.max_sentence_len - len(target_word))
                     p.append(_p)
                     p_r.append(_p)
-                elif self.position == 'distance':
+                elif self.position == 'distance' or self.position == 'distance-add':
                     _p = [0] * len(target_word) + list(range(1, 1+len(words_l)))
                     _p = _p + [0] * (self.max_sentence_len - len(_p))
                     p.append(_p)
@@ -468,7 +512,7 @@ class TCDecoder(BaseModel):
 
                 if self.position == 'binary':
                     p.append([0]*len(target_word[:ml]) + [0] + [1 if tag != 'O' else 0 for tag in sample['tags']] + [0] * (sentence_len - len(words)))
-                elif self.position == 'distance':
+                elif self.position == 'distance' or self.position == 'distance-add':
                     p.append([0]*len(target_word[:ml]) + [0] + list(range(-len(words_l), 0)) + [0]*len(target_word) + list(range(1, 1+len(words_r))) + [0] * (sentence_len - len(words)))
         
         if self.bidirection:
@@ -478,15 +522,15 @@ class TCDecoder(BaseModel):
                     'm_bw': np.asarray(m_r), 
                     'target_words': np.asarray(target_words),
                     'y': np.asarray(y),
-                    'p_fw': np.asarray(p),
-                    'p_bw': np.asarray(p_r),
+                    'p_fw': np.clip(np.asarray(p), -10, 10),
+                    'p_bw': np.clip(np.asarray(p_r), -10, 10),
                     }
         else:
             return {'x': np.asarray(x),
                     'm': np.asarray(m),
                     'target_words': np.asarray(target_words),
                     'y': np.asarray(y),
-                    'p': np.asarray(p),
+                    'p': np.clip(np.asarray(p), -10, 10),
                     }
 
 def main(_):
@@ -522,7 +566,7 @@ def main(_):
                 #decoder_type=FLAGS.decoder_type,
                 decoder_type='sclstm',
                 grad_clip=FLAGS.grad_clip,
-                position='binary',
+                position='distance-add',
                 bidirection=True)
 
         model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.')

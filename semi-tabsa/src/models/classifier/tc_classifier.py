@@ -207,9 +207,11 @@ class TCClassifier(BaseModel):
             cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=y))
 
         with tf.name_scope('train'):
-            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(cost, global_step=self.global_step)
+            #optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(cost, global_step=self.global_step)
+            optimizer = self.training_op(cost, tf.trainable_variables(), self.grad_clip, 20, self.learning_rate)
 
         with tf.name_scope('predict'):
+            pred = tf.argmax(logits, axis=1)
             correct_pred = tf.equal(tf.argmax(logits, axis=1), tf.argmax(y, axis=1))
             accuracy = tf.reduce_sum(tf.cast(correct_pred, tf.int32))
             _acc = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
@@ -262,10 +264,28 @@ class TCClassifier(BaseModel):
             #print(cnt)
             #print(acc)
             test_summary_writer.add_summary(summary, step)
-            print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(step, loss / cnt, acc / cnt))
+            #print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(step, loss / cnt, acc / cnt))
             test_summary_writer.add_summary(summary, step)
             if acc / cnt > max_acc:
                 max_acc = acc / cnt
+                with open(os.path.join(_dir, 'pred'), 'w') as f:
+                    idx2y = {0:'positive', 1:'negative', 2:'neutral'}
+                    print(_dir)
+                    for samples, in test_data:
+                        feed_data = self.prepare_data(samples)
+                        feed_data.update({'keep_rate': 1.0})
+                        input_placeholders.update(hyper_inputs)
+                        feed_dict = self.get_feed_dict(input_placeholders, feed_data)
+                        feed_dict.update({y: get_y(samples)})
+                        _pred, = sess.run([pred], feed_dict=feed_dict)
+                        for idx, sample in enumerate(samples):
+                            f.write(idx2y[_pred[idx]])
+                            f.write('\t')
+                            f.write(sample['polarity'])
+                            f.write('\t')
+                            f.write(' '.join([t + ' ' + str(b) for (t, b) in zip(sample['tokens'], sample['tags'])]))
+                            f.write('\n')
+
         print('Optimization Finished! Max acc={}'.format(max_acc))
 
         print('Learning_rate={}, iter_num={}, hidden_num={}, l2={}'.format(
@@ -339,11 +359,11 @@ def main(_):
             '../../../../data/se2014task06/tabsa-rest/dev.pkl',
             '../../../../data/se2014task06/tabsa-rest/test.pkl',]
 
-    data_dir = '../0617'
+    data_dir = '../unlabel10k/'
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
     word2idx, embedding = preprocess_data(fns, '/Users/wdxu/data/glove/glove.6B/glove.6B.300d.txt', data_dir)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
-    test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=False)
+    test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=True)
 
     configproto = tf.ConfigProto()
     configproto.gpu_options.allow_growth = True
@@ -361,7 +381,7 @@ def main(_):
                 embedding=embedding,
                 grad_clip=FLAGS.grad_clip)
 	
-        model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, data_dir)
+        model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.')
 
 if __name__ == '__main__':
     FLAGS = tf.app.flags.FLAGS
@@ -373,7 +393,7 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('max_sentence_len', 80, 'max number of tokens per sentence')
     tf.app.flags.DEFINE_float('l2_reg', 0.001, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
-    tf.app.flags.DEFINE_integer('n_iter', 20, 'number of train iter')
+    tf.app.flags.DEFINE_integer('n_iter', 50, 'number of train iter')
     
     tf.app.flags.DEFINE_string('train_file_path', 'data/twitter/train.raw', 'training file')
     tf.app.flags.DEFINE_string('validate_file_path', 'data/twitter/validate.raw', 'validating file')

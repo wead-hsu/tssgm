@@ -26,7 +26,7 @@ class BatchIterator(object):
             np.random.seed(1234567890)
             self.createindices = lambda: np.random.permutation(self.n)
         else: # testing == true
-            assert self.n % self.batchsize == 0, "for testing n must be multiple of batch size"
+            #assert self.n % self.batchsize == 0, "for testing n must be multiple of batch size"
             self.createindices = lambda: range(self.n)
 
         self.perm = self.createindices()
@@ -42,14 +42,20 @@ class BatchIterator(object):
         # return a list of permuted batch indeces
         batches = []
         for i in range(n_batches):
-            # extend random permuation if shorter than batchsize
-            if len(self.perm) <= self.batchsize:
-                new_perm = self.createindices()
-                self.perm = np.hstack([self.perm, new_perm])
+            if len(self.perm) == 0:
+                self.perm = self.createindices()
                 raise StopIteration()
-
-            batches.append(self.perm[:self.batchsize])
-            self.perm = self.perm[self.batchsize:]
+            if len(self.perm) <= self.batchsize and len(self.perm) > 0:
+                if self.testing:
+                    batches.append(self.perm[:self.batchsize])
+                    self.perm = self.perm[self.batchsize:]
+                else:
+                    new_perm = self.createindices()
+                    self.perm = np.hstack([self.perm, new_perm])
+                    raise StopIteration()
+            else:
+                batches.append(self.perm[:self.batchsize])
+                self.perm = self.perm[self.batchsize:]
         return batches
 
     def next(self):
@@ -83,3 +89,14 @@ def threaded_generator(generator, num_cached=50):
         yield item
         queue.task_done()
         item = queue.get()
+
+if __name__ == '__main__':
+    it = BatchIterator(range(100), 10, [range(100)], testing = False)
+    for g in it: print(g)
+    print()
+    for g in it: print(g)
+
+    it = BatchIterator(range(100), 10, [range(100)], testing = True)
+    for g in it: print(g)
+    print()
+    for g in it: print(g)

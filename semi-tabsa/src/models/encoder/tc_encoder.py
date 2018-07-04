@@ -111,11 +111,25 @@ class TCEncoder(BaseModel):
         elif self.position == 'distance':
             logger.info('Distance embedding is initialized and trainable')
             num_units = self.embedding_dim // 10
-            position_enc = np.array([[pos / np.power(10000, 2.*i/num_units) for i in range(num_units)] for pos in range(-self.max_sentence_len ,self.max_sentence_len)])
-            position_enc[:, 0::2] = np.sin(position_enc[:, 0::2])  # dim 2i
-            position_enc[:, 1::2] = np.cos(position_enc[:, 1::2])  # dim 2i+1
-            self.pos_embedding = tf.get_variable('pos_embedding', [2*self.max_sentence_len, embedding_dim/10], initializer=tf.constant_initializer(position_enc))
-
+            position_enc = np.zeros([2*self.max_sentence_len, num_units])
+            for i in range(-self.max_sentence_len, self.max_sentence_len):
+                for j in range(num_units):
+                    if j % 2 == 0:
+                        position_enc[i+self.max_sentence_len, j] = np.sin(i/np.power(10000, j/num_units))
+                    else:
+                        position_enc[i+self.max_sentence_len, j] = np.cos(i/np.power(10000, (j//2)*2/num_units))
+            self.pos_embedding = tf.get_variable('pos_embedding', [2*self.max_sentence_len, num_units], initializer=tf.constant_initializer(position_enc), trainable=False)
+        elif self.position == 'distance-add':
+            logger.info('Distance embedding is initialized and trainable')
+            num_units = self.embedding_dim
+            position_enc = np.zeros([2*self.max_sentence_len, num_units])
+            for i in range(-self.max_sentence_len, self.max_sentence_len):
+                for j in range(num_units):
+                    if j % 2 == 0:
+                        position_enc[i+self.max_sentence_len, j] = np.sin(i/np.power(10000, j/num_units))
+                    else:
+                        position_enc[i+self.max_sentence_len, j] = np.cos(i/np.power(10000, (j//2)*2/num_units))
+            self.pos_embedding = tf.get_variable('pos_embedding', [2*self.max_sentence_len, num_units], initializer=tf.constant_initializer(position_enc), trainable=False)
 
     def create_placeholders(self, tag):
         with tf.name_scope('inputs'):
@@ -127,14 +141,14 @@ class TCEncoder(BaseModel):
                     plhs['m_fw']         = tf.placeholder(tf.float32, [None, self.max_sentence_len], name='m_fw')
                     plhs['m_bw']         = tf.placeholder(tf.float32, [None, self.max_sentence_len], name='m_bw')
                     plhs['target_words'] = tf.placeholder(tf.int32, [None, 1], name='target_words')
-                    if self.position == 'binary' or self.position == 'distance':
+                    if self.position:
                         plhs['p_fw']     = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='p_fw')
                         plhs['p_bw']     = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='p_bw')
                 else:
                     plhs['x']            = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='x')
                     plhs['m']            = tf.placeholder(tf.float32, [None, self.max_sentence_len], name='m')
                     plhs['target_words'] = tf.placeholder(tf.int32, [None, 1], name='target_words')
-                    if self.position == 'binary' or self.position == 'distance':
+                    if self.position:
                         plhs['p']        = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='p')
 
             elif tag == 'y':
@@ -159,6 +173,10 @@ class TCEncoder(BaseModel):
         elif self.position == 'distance':
             inputs_pos = tf.nn.embedding_lookup(self.pos_embedding, p + self.max_sentence_len)
             inputs = tf.concat([inputs, inputs_pos], axis=2)
+        elif self.position == 'distance-add':
+            inputs_pos = tf.nn.embedding_lookup(self.pos_embedding, p + self.max_sentence_len)
+            inputs = inputs + inputs_pos
+
         return inputs
 
     def bi_dynamic_lstm(self, inputs_fw, inputs_bw, m_fw, m_bw, keep_rate):
@@ -425,7 +443,7 @@ class TCEncoder(BaseModel):
                     _p.reverse()
                     _p = _p + [0] * (self.max_sentence_len - len(_p))
                     p_r.append(_p)
-                elif self.position == 'distance':
+                elif self.position == 'distance' or self.position == 'distance-add':
                     _p = [0] * len(target_word) + list(range(1, len(words_l)+1))
                     _p.reverse()
                     _p = _p + [0] * (self.max_sentence_len - len(_p))
@@ -458,7 +476,7 @@ class TCEncoder(BaseModel):
 
                 if self.position == 'binary':
                     p.append([0]*len(target_word[:ml]) + [0] + [1 if tag != 'O' else 0 for tag in sample['tags']] + [0] * (sentence_len - len(words)))
-                elif self.position == 'distance':
+                elif self.position == 'distance' or self.position == 'distance-add':
                     p.append([0]*len(target_word[:ml]) + [0] + list(range(-len(words_l), 0)) + [0]*len(target_word) + list(range(1, len(words_r)+1)) + [0] * (sentence_len - len(words)))
         
         if self.bidirection:
@@ -468,15 +486,15 @@ class TCEncoder(BaseModel):
                     'm_bw': np.asarray(m_r), 
                     'target_words': np.asarray(target_words),
                     'y': np.asarray(y),
-                    'p_fw': np.asarray(p),
-                    'p_bw': np.asarray(p_r),
+                    'p_fw': np.clip(np.asarray(p), -10, 10),
+                    'p_bw': np.clip(np.asarray(p_r), -10, 10),
                     }
         else:
             return {'x': np.asarray(x),
                     'm': np.asarray(m),
                     'target_words': np.asarray(target_words),
                     'y': np.asarray(y),
-                    'p': np.asarray(p),
+                    'p': np.clip(np.asarray(p), -10, 10),
                     }
 
 def main(_):
@@ -510,7 +528,7 @@ def main(_):
                 embedding=embedding,
                 dim_z = 3,
                 grad_clip=FLAGS.grad_clip,
-                position='distance',
+                position='distance-add',
                 bidirection=True,
                 )
         model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.')
