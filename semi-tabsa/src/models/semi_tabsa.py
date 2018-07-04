@@ -100,7 +100,7 @@ def load_data(data_dir):
     return word2idx, embedding
 
 class SemiTABSA(BaseModel):
-    def __init__(self, word2idx, embedding_dim, batch_size, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, pri_prob_y, decoder_type, grad_clip, n_hidden_ae, position_enc, bidirection_enc, position_dec, bidirection_dec, classifier_type):
+    def __init__(self, word2idx, embedding_dim, batch_size, n_hidden, learning_rate, n_class, max_sentence_len, l2_reg, embedding, dim_z, pri_prob_y, decoder_type, grad_clip, n_hidden_ae, position_enc, bidirection_enc, position_dec, bidirection_dec, classifier_type, sharefc):
         super(SemiTABSA, self).__init__()
 
         self.embedding_dim = embedding_dim
@@ -121,6 +121,7 @@ class SemiTABSA(BaseModel):
         self.bidirection_enc = bidirection_enc
         self.position_dec = position_dec
         self.bidirection_dec = bidirection_dec
+        self.sharefc = sharefc
 
         if embedding is None:
             logger.info('No embedding is given, initialized randomly')
@@ -185,6 +186,7 @@ class SemiTABSA(BaseModel):
                     grad_clip=self.grad_clip,
                     position=self.position_dec,
                     bidirection=self.bidirection_dec,
+                    sharefc=self.sharefc,
                     )
 
         self.klw = tf.placeholder(tf.float32, [], 'klw')
@@ -461,6 +463,7 @@ def main(_):
                 position_dec=FLAGS.position_dec,
                 bidirection_dec=FLAGS.bidirection_dec,
                 classifier_type=FLAGS.classifier_type,
+                sharefc=FLAGS.sharefc,
                 )
 
         model.run(sess, train_it, unlabel_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, save_dir, FLAGS.batch_size, FLAGS.alpha, vars(FLAGS)['__flags'])
