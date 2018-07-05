@@ -3,3 +3,5 @@
 data/
 MemNet_ABSA/
 TD-LSTM/
+baseline/
+semi_tabsa/semi-tabsa/src/models/unlabel*/

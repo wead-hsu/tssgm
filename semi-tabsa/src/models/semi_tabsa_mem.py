@@ -13,7 +13,7 @@ import numpy as np
 import os
 import logging
 from collections import Counter
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ def preprocess_data(fns, pretrain_fn, data_dir, FLAGS):
         if pretrain_fn is None:
             logger.info('Pretrained vector is not given, the embedding matrix is not created')
         else:
-            pretrained_vectors = {str(l.split()[0]): [float(n) for n in l.split()[1:]] for l in open(pretrain_fn).readlines()}
+            pretrained_vectors = {str(l.split(" ")[0]): [float(n) for n in l.split(" ")[1:]] for l in open(pretrain_fn).readlines()}
             dim_emb = len(pretrained_vectors[list(pretrained_vectors.keys())[0]])
             def build_emb(pretrained_vectors, word2idx):
                 emb_init = np.random.randn(len(word2idx), dim_emb) * 1e-2
@@ -159,16 +159,31 @@ class SemiTABSA(BaseModel):
         if word_embedding is None:
             logger.info('No embedding is given, initialized randomly')
             wemb_init = np.random.randn([len(word2idx), embedding_dim]) * 1e-2
-            self.word_embedding = tf.get_variable('word_embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(embedding))
+            self.word_embedding = tf.get_variable('word_embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(wemb_init))
         elif isinstance(word_embedding, np.ndarray):
             logger.info('Numerical embedding is given with shape {}'.format(str(word_embedding.shape)))
-            self.word_embedding = tf.constant(word_embedding, name='embedding')
+            #self.word_embedding = tf.constant(word_embedding, name='embedding')
+            self.word_embedding = tf.get_variable('word_embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(word_embedding))
         elif isinstance(word_embedding, tf.Tensor):
             logger.info('Import tensor as the embedding: '.format(word_embedding.name))
             self.word_embedding = word_embedding
         else:
+            raise Exception('Embedding type {} is not supported'.format(type(word_embedding)))
+
+        if target_embedding is None:
+            logger.info('No embedding is given, initialized randomly')
+            wemb_init = np.random.randn([len(target2idx), embedding_dim]) * 1e-2
+            self.target_embedding = tf.get_variable('target_embedding', [len(target2idx), embedding_dim], initializer=tf.constant_initializer(wemb_init))
+        elif isinstance(target_embedding, np.ndarray):
+            logger.info('Numerical embedding is given with shape {}'.format(str(target_embedding.shape)))
+            #self.word_embedding = tf.constant(word_embedding, name='embedding')
+            self.target_embedding = tf.get_variable('target_embedding', [len(target2idx), embedding_dim], initializer=tf.constant_initializer(target_embedding))
+        elif isinstance(target_embedding, tf.Tensor):
+            logger.info('Import tensor as the embedding: '.format(target_embedding.name))
+            self.target_embedding = target_embedding
+        else:
             raise Exception('Embedding type {} is not supported'.format(type(embedding)))
-        self.target_embedding = target_embedding
+
         #TODO: Take the network graph building codes to a new module. 
         #self.classifier = self.create_classifier(self.classifier_type)
         with tf.variable_scope('classifier'):
@@ -202,7 +217,7 @@ class SemiTABSA(BaseModel):
                                      lindim=300,
                                      max_grad_norm=100,
                                      pad_idx=len(word2idx),
-                                     pre_trained_context_wt=word_embedding,
+                                     pre_trained_context_wt=self.word_embedding,
                                      pre_trained_target_wt=self.target_embedding)
 
         with tf.variable_scope('encoder'):
@@ -433,9 +448,10 @@ class SemiTABSA(BaseModel):
             test_summary_writer.add_summary(summary, _step)
             logger.info('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(_step, loss / cnt, acc / cnt))
             print(save_dir)
+            _dir="unlabel10k" 
             if acc / cnt > max_acc:
                 max_acc = acc / cnt
-
+ 
         logger.info('Optimization Finished! Max acc={}'.format(max_acc))
 
         logger.info('Learning_rate={}, iter_num={}, hidden_num={}, l2={}'.format(
@@ -456,14 +472,15 @@ def main(_):
                 + '_dimz' + str(FLAGS.dim_z)  + '_dec' + str(FLAGS.decoder_type) + '_unlabel' + str(FLAGS.n_unlabel)\
                 + '_positionenc' + str(FLAGS.position_enc) + '_bidirectionenc' + str(FLAGS.bidirection_enc)\
                 + '_positiondec' + str(FLAGS.position_dec) + '_bidirectiondec' + str(FLAGS.bidirection_dec)\
-                + '_vochas10kunl_addunkpd_noapconcattindec_kl1e-4_noh_nofixemb'
+                + '_hop3_opimadagrad_vochas10kunl_addunkpd_noapconcattindec_kl1e-4_noh_nofixemb_sharemb'
     #save_dir = 'tmp'
 
     from src.io.batch_iterator import BatchIterator
     train = pkl.load(open(FLAGS.train_file_path, 'rb'), encoding='latin')
     unlabel = pkl.load(open(FLAGS.unlabel_file_path, 'rb'), encoding='latin')[:FLAGS.n_unlabel]
     test = pkl.load(open(FLAGS.test_file_path, 'rb'), encoding='latin')
-
+    val = pkl.load(open(FLAGS.validate_file_path, 'rb'), encoding='latin')
+     
     def get_y(samples):
         y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
         ys = [y_dict[sample['polarity']] for sample in samples]
@@ -474,14 +491,18 @@ def main(_):
     #pri_prob_y = np.ones(FLAGS.n_class).astype('float32')/FLAGS.n_class
     print(pri_prob_y)
     
-    fns = [FLAGS.train_file_path,  FLAGS.validate_file_path, FLAGS.test_file_path, FLAGS.unlabel_file_path]
+    fns = [FLAGS.train_file_path,  FLAGS.test_file_path, FLAGS.unlabel_file_path]
 
     data_dir = 'unlabel10k'
-    word2idx, target2idx, word_embedding, target_embedding = preprocess_data(fns, '../../../data/glove.6B/glove.6B.300d.txt', data_dir, FLAGS)
+    #emb_file = "../../../data/word2vec/cbow.unlabel.300d.txt"
+    emb_file = "../../../data/glove.6B/glove.6B.300d.txt"
+    #emb_file = "../../../data/glove.840B/glove.840B.300d.txt"
+    word2idx, target2idx, word_embedding, target_embedding = preprocess_data(fns, emb_file, data_dir, FLAGS)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
     unlabel_it = BatchIterator(len(unlabel), FLAGS.batch_size, [unlabel], testing=False)
     test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=False)
-
+   # val_it = BatchIterator(len(val), FLAGS.batch_size, [val], testing=False)
+    
     configproto = tf.ConfigProto()
     configproto.gpu_options.allow_growth = True
     configproto.allow_soft_placement = True
@@ -515,15 +536,15 @@ def main(_):
 
 if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('embedding_dim', 300, 'dimension of word embedding')
-    tf.app.flags.DEFINE_integer('batch_size', 300, 'number of example per batch')
+    tf.app.flags.DEFINE_integer('batch_size', 128, 'number of example per batch')
     tf.app.flags.DEFINE_integer('n_hidden', 200, 'number of hidden unit')
     tf.app.flags.DEFINE_integer('n_hidden_ae', 100, 'number of hidden unit')
     tf.app.flags.DEFINE_float('learning_rate', 0.01, 'learning rate')
     tf.app.flags.DEFINE_integer('n_class', 3, 'number of distinct class')
     tf.app.flags.DEFINE_integer('max_sentence_len', 85, 'max number of tokens per sentence')
-    tf.app.flags.DEFINE_float('l2_reg', 0.001, 'l2 regularization')
+    tf.app.flags.DEFINE_float('l2_reg', 0.01, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
-    tf.app.flags.DEFINE_integer('n_iter', 50, 'number of train iter')
+    tf.app.flags.DEFINE_integer('n_iter', 100, 'number of train iter')
     tf.app.flags.DEFINE_integer('n_unlabel', 10000, 'number of unlabeled')
     
     tf.app.flags.DEFINE_string('train_file_path', '../../../data/se2014task06/tabsa-rest/train.pkl', 'training file')
@@ -538,8 +559,8 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_float('alpha', 5.0, 'weight of alpha')
     tf.app.flags.DEFINE_string('save_dir', '.', 'directory of save file')
     tf.app.flags.DEFINE_string('position_enc', '', '[binary, distance, ], None for no position embedding')
-    tf.app.flags.DEFINE_boolean('bidirection_enc', True, 'boolean')
+    tf.app.flags.DEFINE_boolean('bidirection_enc', False, 'boolean')
     tf.app.flags.DEFINE_string('position_dec', '', '[binary, distance, ], None for no position embedding')
-    tf.app.flags.DEFINE_boolean('bidirection_dec', True, 'boolean')
+    tf.app.flags.DEFINE_boolean('bidirection_dec', False, 'boolean')
 
     tf.app.run()

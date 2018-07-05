@@ -51,7 +51,7 @@ class BaseModel(object):
         for i, g in enumerate(grads):
             if g is None:
                 print('WARNING: {} is not in the graph'.format(var_list[i].name))
-#        grads = [g for g in grads if g is not None]
+        grads = [g for g in grads if g is not None]
         if grad_clip > 0: grads = [tf.clip_by_value(g, -grad_clip, grad_clip) for g in grads]
         if max_norm > 0: grads, _ = tf.clip_by_global_norm(grads, max_norm)
         optimizer = tf.train.AdagradOptimizer(learning_rate)

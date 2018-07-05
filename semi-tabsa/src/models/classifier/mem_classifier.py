@@ -148,16 +148,23 @@ class MEMClassifier(BaseModel):
         return str(self.__dict__)
 
     def build_memory(self, mem_inputs):
-      #self.global_step = tf.Variable(0, name="global_step")
+      self.global_step = tf.Variable(0, name="global_step", trainable=False)
 
       self.input = mem_inputs['input']
       self.context = mem_inputs['context']
       self.mask = mem_inputs['mask']
 
       #self.A = tf.get_variable("A", [self.nwords, self.edim], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
-      self.A = tf.get_variable("A", [self.nwords, self.edim], initializer=tf.constant_initializer(self.pre_trained_context_wt), trainable=False)
-      #self.ASP = tf.get_variable("ASP", [self.pre_trained_target_wt.shape[0], self.edim], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01), trainable=False)
-      self.ASP = tf.get_variable("ASP", [self.pre_trained_target_wt.shape[0], self.edim], initializer=tf.constant_initializer(self.pre_trained_target_wt), trainable=False)
+      if isinstance(self.pre_trained_context_wt, np.ndarray):
+          self.A = tf.get_variable("A", [self.nwords, self.edim], initializer=tf.constant_initializer(self.pre_trained_context_wt), trainable=True)
+      elif isinstance(self.pre_trained_context_wt, tf.Tensor) or isinstance(self.pre_trained_context_wt, tf.Variable):
+          self.A = self.pre_trained_context_wt
+      
+      if isinstance(self.pre_trained_target_wt, np.ndarray):
+          self.ASP = tf.get_variable("ASP", [self.pre_trained_target_wt.shape[0], self.edim], initializer=tf.constant_initializer(self.pre_trained_target_wt), trainable=False)
+      elif isinstance(self.pre_trained_target_wt, tf.Tensor) or isinstance(self.pre_trained_target_wt, tf.Variable):
+          self.ASP = self.pre_trained_target_wt
+
       self.C = tf.get_variable("C", [self.edim, self.edim], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
       self.C_B = tf.get_variable("C_B", [1, self.edim], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
       self.BL_W = tf.get_variable("BL_W", [2 * self.edim, 1], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
@@ -166,7 +173,7 @@ class MEMClassifier(BaseModel):
       
       self.Ain_c = tf.nn.embedding_lookup(self.A, self.context)
       self.Ain = self.Ain_c
-
+      #self.ASPin = tf.reduce_mean(tf.nn.embedding_lookup(self.A, self.input), axis=1)
       self.ASPin = tf.nn.embedding_lookup(self.ASP, self.input)
       self.ASPout2dim = tf.reshape(self.ASPin, [-1, self.edim])
       self.hid.append(self.ASPout2dim)
@@ -231,54 +238,47 @@ class MEMClassifier(BaseModel):
         with tf.name_scope('forward'):
             self.build_memory(mem_inputs)
             self.W = tf.get_variable("W", [self.edim, 3], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
-            self.z = tf.matmul(self.hid[-1], self.W)
-            #logits = self.z
-        return self.z
+            self.logits = tf.matmul(self.hid[-1], self.W)
+        return self.logits
 
-    def get_loss(self, logits, y_inputs, pri_prob_y):
+    def get_loss(self, logits, y_inputs, pri_prob_y=None):
         #y = tf.argmax(y_inputs['y'], axis=1)
-        y = y_inputs['y']
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
-        pri_loss = tf.log(tf.gather(pri_prob_y, y))
-        correct_pred = tf.equal(tf.argmax(logits, axis=1), y)
-        acc = tf.reduce_mean(tf.to_float(correct_pred))
-        return loss, acc, pri_loss
-        
-    def run(self, sess, train_data, test_data, n_iter, keep_rate, save_dir):
-        
-        #self.init_global_step()
-        self.global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
-        mem_inputs = self.create_placeholders('xa')
-        hyper_inputs = self.create_placeholders('hyper')
-        print("place_holders:" + str(mem_inputs))
-        #y = self.create_placeholders['y']['y']
-        self.y = tf.placeholder(tf.int64, [self.batch_size], name="y")
-        
-        logits = self.forward(mem_inputs, hyper_inputs )
-
-        
-        params = [self.C, self.C_B, self.W, self.BL_W, self.BL_B]
-        with tf.name_scope('loss'):
-            #cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=self.target))
-            self.loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=self.y)
-            self.loss = tf.reduce_sum(self.loss) 
+        self.y = y_inputs['y']
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.y, logits=logits)
+        if pri_prob_y is not None:
+            pri_loss = tf.log(tf.gather(pri_prob_y, self.y))
+            correct_pred = tf.equal(tf.argmax(logits, axis=1), self.y)
+            acc = tf.reduce_mean(tf.to_float(correct_pred))
+            return loss, acc, pri_loss
+        return loss
+    def get_training_op(self, loss_inp, learning_rate):        
         with tf.name_scope('train'):
-            #optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(cost, global_step=self.global_step)
-            self.lr = tf.Variable(self.init_lr, name="lr")
-            self.opt = tf.train.AdagradOptimizer(self.lr)
-            grads_and_vars = self.opt.compute_gradients(self.loss,params)
-           # clipped_grads_and_vars = [(tf.clip_by_norm(gv[0], self.max_grad_norm), gv[1]) \
-           #                         for gv in grads_and_vars]
+            self.opt = tf.train.AdagradOptimizer(learning_rate)
+            grads_and_vars = self.opt.compute_gradients(loss_inp, tf.trainable_variables())
             
             clipped_grads, _ = tf.clip_by_global_norm([ gv[0] for gv in grads_and_vars], self.max_grad_norm)
         
             inc = self.global_step.assign_add(1)
             with tf.control_dependencies([inc]):
                 self.optim = self.opt.apply_gradients(zip(clipped_grads, [gv[1] for gv in grads_and_vars]))
-                #self.optim = self.opt.apply_gradients(clipped_grads_and_vars)
+        return self.optim
+
+    def run(self, sess, train_data, test_data, n_iter, keep_rate, save_dir):
+        
+        #self.init_global_step()
+        #self.global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
+        mem_inputs = self.create_placeholders('xa')
+        hyper_inputs = self.create_placeholders('hyper')
+        print("place_holders:" + str(mem_inputs))
+        y_input = self.create_placeholders('y')
+        
+        self.logits = self.forward(mem_inputs, hyper_inputs)
+
+        self.loss = tf.reduce_sum(self.get_loss(self.logits, y_input))
+        self.optim = self.get_training_op(self.loss, self.init_lr)
 
         with tf.name_scope('predict'):
-            correct_pred = tf.equal(tf.argmax(logits, axis=1), self.y)
+            correct_pred = tf.equal(tf.argmax(self.logits, axis=1), self.y)
             self.correct_pred = tf.reduce_sum(tf.cast(correct_pred, tf.int32))
             self._acc = tf.reduce_mean(tf.cast(self.correct_pred, tf.float32))
 
@@ -306,7 +306,7 @@ class MEMClassifier(BaseModel):
         def fetch_results(data, test=False):
             data_dict = self.prepare_data(data)
             if not test:
-                logits, _, loss, self.step, summary_op = sess.run([ self.z, self.optim,
+                logits, _, loss, self.step, summary_op = sess.run([ self.logits, self.optim,
                                                    self.loss,
                                                    self.global_step,
 						   train_summary_op],
@@ -319,7 +319,7 @@ class MEMClassifier(BaseModel):
     
             if test:
                 #raw_labels = []
-                logits, loss, correct_pred, step, summary = sess.run([self.z, self.loss, self.correct_pred, self.global_step, test_summary_op], feed_dict={self.input: data_dict['input'],
+                logits, loss, correct_pred, step, summary = sess.run([self.logits, self.loss, self.correct_pred, self.global_step, test_summary_op], feed_dict={self.input: data_dict['input'],
                                                              self.y: data_dict['y'],
                                                              self.context:data_dict['context'],
                                                              self.mask: data_dict['mask']})
@@ -361,6 +361,7 @@ class MEMClassifier(BaseModel):
         sent_word2idx = self.word2idx
         target_word2idx = self.target2idx
         x = np.ndarray([self.batch_size, 1], dtype=np.int32)
+        #x = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
         time = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
         y = np.zeros([self.batch_size], dtype=np.int32) 
         context = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
@@ -402,6 +403,7 @@ class MEMClassifier(BaseModel):
             is_included_flag = 1
             id_tokenised_sentence = []
             location_tokenised_sentence = []
+            id_tokenised_target = [] 
             for index, word in enumerate(sent_words):
                 if word == "$t$":
                     continue
@@ -417,22 +419,26 @@ class MEMClassifier(BaseModel):
                 #if word in self.embeddings:
                 id_tokenised_sentence.append(word_index)
                 location_tokenised_sentence.append(location_info)
+
 	    #Mem_ABSA data load code
             #is_included_flag = 0
             #for word in target_words:
             #    if word in self.embeddings:
             #        is_included_flag = 1
             #    break
+
             try:
                 target_index = target_word2idx.get(target, target_word2idx["$unk$"])
-                #target_index = target_word2idx[target]
+               # for word in target_words:
+               #     id_tokenised_target.append(sent_word2idx.get(word, 0))
             except:
                 print(target)
                 print("id not found for target")
                 exit()
 
 
-            x[b][0] = target_index  
+            #x[b,:len(id_tokenised_target)] = id_tokenised_target
+            x[b][0] = target_index
             y[b] = polarity
             time[b,:len(location_tokenised_sentence)]=location_tokenised_sentence
             context[b,:len(id_tokenised_sentence)] = id_tokenised_sentence
@@ -501,7 +507,7 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('max_sentence_len', 79, 'max number of tokens per sentence')
     tf.app.flags.DEFINE_float('l2_reg', 0.001, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
-    tf.app.flags.DEFINE_integer('n_iter', 50, 'number of train iter')
+    tf.app.flags.DEFINE_integer('n_iter', 100, 'number of train iter')
     
     tf.app.flags.DEFINE_string('train_file_path', 'data/twitter/train.raw', 'training file')
     tf.app.flags.DEFINE_string('validate_file_path', 'data/twitter/validate.raw', 'validating file')
