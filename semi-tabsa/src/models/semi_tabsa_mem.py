@@ -13,7 +13,7 @@ import numpy as np
 import os
 import logging
 from collections import Counter
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -162,8 +162,8 @@ class SemiTABSA(BaseModel):
             self.word_embedding = tf.get_variable('word_embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(wemb_init))
         elif isinstance(word_embedding, np.ndarray):
             logger.info('Numerical embedding is given with shape {}'.format(str(word_embedding.shape)))
-            #self.word_embedding = tf.constant(word_embedding, name='embedding')
-            self.word_embedding = tf.get_variable('word_embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(word_embedding))
+            self.word_embedding = tf.constant(word_embedding, name='embedding')
+            #self.word_embedding = tf.get_variable('word_embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(word_embedding))
         elif isinstance(word_embedding, tf.Tensor):
             logger.info('Import tensor as the embedding: '.format(word_embedding.name))
             self.word_embedding = word_embedding
@@ -176,8 +176,8 @@ class SemiTABSA(BaseModel):
             self.target_embedding = tf.get_variable('target_embedding', [len(target2idx), embedding_dim], initializer=tf.constant_initializer(wemb_init))
         elif isinstance(target_embedding, np.ndarray):
             logger.info('Numerical embedding is given with shape {}'.format(str(target_embedding.shape)))
-            #self.word_embedding = tf.constant(word_embedding, name='embedding')
-            self.target_embedding = tf.get_variable('target_embedding', [len(target2idx), embedding_dim], initializer=tf.constant_initializer(target_embedding))
+            self.target_embedding = tf.constant(target_embedding, name='embedding')
+#            self.target_embedding = tf.get_variable('target_embedding', [len(target2idx), embedding_dim], initializer=tf.constant_initializer(target_embedding))
         elif isinstance(target_embedding, tf.Tensor):
             logger.info('Import tensor as the embedding: '.format(target_embedding.name))
             self.target_embedding = target_embedding
@@ -217,8 +217,8 @@ class SemiTABSA(BaseModel):
                                      lindim=300,
                                      max_grad_norm=100,
                                      pad_idx=len(word2idx),
-                                     pre_trained_context_wt=self.word_embedding,
-                                     pre_trained_target_wt=self.target_embedding)
+                                     pre_trained_context_wt=word_embedding,
+                                     pre_trained_target_wt=target_embedding)
 
         with tf.variable_scope('encoder'):
             self.encoder = TCEncoder(word2idx=word2idx, 
@@ -472,7 +472,7 @@ def main(_):
                 + '_dimz' + str(FLAGS.dim_z)  + '_dec' + str(FLAGS.decoder_type) + '_unlabel' + str(FLAGS.n_unlabel)\
                 + '_positionenc' + str(FLAGS.position_enc) + '_bidirectionenc' + str(FLAGS.bidirection_enc)\
                 + '_positiondec' + str(FLAGS.position_dec) + '_bidirectiondec' + str(FLAGS.bidirection_dec)\
-                + '_hop3_opimadagrad_vochas10kunl_addunkpd_noapconcattindec_kl1e-4_noh_nofixemb_sharemb'
+                + '_hop3_opimadagrad_vochas10kunl_addunkpd_noapconcattindec_kl1e-4_noh_nofixemb'
     #save_dir = 'tmp'
 
     from src.io.batch_iterator import BatchIterator
@@ -536,7 +536,7 @@ def main(_):
 
 if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('embedding_dim', 300, 'dimension of word embedding')
-    tf.app.flags.DEFINE_integer('batch_size', 128, 'number of example per batch')
+    tf.app.flags.DEFINE_integer('batch_size', 300, 'number of example per batch')
     tf.app.flags.DEFINE_integer('n_hidden', 200, 'number of hidden unit')
     tf.app.flags.DEFINE_integer('n_hidden_ae', 100, 'number of hidden unit')
     tf.app.flags.DEFINE_float('learning_rate', 0.01, 'learning rate')
