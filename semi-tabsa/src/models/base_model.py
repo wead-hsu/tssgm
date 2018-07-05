@@ -54,7 +54,8 @@ class BaseModel(object):
         grads = [g for g in grads if g is not None]
         if grad_clip > 0: grads = [tf.clip_by_value(g, -grad_clip, grad_clip) for g in grads]
         if max_norm > 0: grads, _ = tf.clip_by_global_norm(grads, max_norm)
-        optimizer = tf.train.AdagradOptimizer(learning_rate)
+        #optimizer = tf.train.AdagradOptimizer(learning_rate)
+        optimizer = tf.train.AdamOptimizer(learning_rate)
 
         if not hasattr(self, 'global_step'):
             self.init_global_step()
