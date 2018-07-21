@@ -135,7 +135,6 @@ class TCDecoder(BaseModel):
                         position_enc[i+self.max_sentence_len, j] = np.cos(i/np.power(10000, (j//2)*2/num_units))
             self.pos_embedding = tf.get_variable('pos_embedding', [2*self.max_sentence_len, num_units], initializer=tf.constant_initializer(position_enc), trainable=False)
 
-
     def create_placeholders(self, tag):
         with tf.name_scope('inputs'):
             plhs = dict()
@@ -145,6 +144,8 @@ class TCDecoder(BaseModel):
                     plhs['x_bw']         = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='x_bw')
                     plhs['m_fw']         = tf.placeholder(tf.float32, [None, self.max_sentence_len], name='m_fw')
                     plhs['m_bw']         = tf.placeholder(tf.float32, [None, self.max_sentence_len], name='m_bw')
+                    plhs['l_fw']         = tf.placeholder(tf.int32, [None], name='l_fw')
+                    plhs['l_bw']         = tf.placeholder(tf.int32, [None], name='l_bw')
                     plhs['target_words'] = tf.placeholder(tf.int32, [None, 1], name='target_words')
                     if self.position:
                         plhs['p_fw']     = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='p_fw')
@@ -152,6 +153,7 @@ class TCDecoder(BaseModel):
                 else:
                     plhs['x']            = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='x')
                     plhs['m']            = tf.placeholder(tf.float32, [None, self.max_sentence_len], name='m')
+                    plhs['l']            = tf.placeholder(tf.int32, [None], name='l')
                     plhs['target_words'] = tf.placeholder(tf.int32, [None, 1], name='target_words')
                     if self.position:
                         plhs['p']        = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='p')
@@ -183,8 +185,8 @@ class TCDecoder(BaseModel):
             inputs = inputs + inputs_pos
         return inputs
 
-    def forward_rnn(self, emb_inp, raw_mask, init_state, y):
-        mask = self.fill_blank(raw_mask)
+    def forward_rnn(self, emb_inp, mask, init_state, y):
+        #mask = self.fill_blank(raw_mask)
         if self.decoder_type.lower() == 'sclstm':
             logger.info('Using ScLSTM as the decoder')
             from src.models.layers.sclstm import ScLSTM
@@ -301,7 +303,7 @@ class TCDecoder(BaseModel):
            
             if self.position: inputs = self.concat_pos_embedding(inputs, xa_inputs['p'])
             with tf.variable_scope('lstm'):
-                outs  = self.forward_rnn(inputs, xa_inputs['m'], yz, y_inputs['y'])
+                outs  = self.forward_rnn(inputs, tf.sequence_mask(xa_inputs['l']), yz, y_inputs['y'])
                 outs = tf.nn.dropout(outs, hyper_inputs['keep_rate'])
                 recons_loss = self.create_softmax_layer(outs, xa_inputs['x'], xa_inputs['m'], y_inputs['y']) * xa_inputs['m']
                 recons_loss = tf.reduce_sum(recons_loss, axis=1)
@@ -337,11 +339,13 @@ class TCDecoder(BaseModel):
             
             with tf.variable_scope('forward_lstm'):
                 #mask = tf.to_float(tf.sequence_mask(xa_inputs['sen_len_fw'], tf.shape(inputs_fw)[1]))
-                outs_fw = self.forward_rnn(inputs_fw, xa_inputs['m_fw'], yz, y_inputs['y'])
+                mask = tf.sequence_mask(xa_inputs['l_fw'], dtype=tf.float32)
+                outs_fw = self.forward_rnn(inputs_fw, mask, yz, y_inputs['y'])
                 outs_fw = tf.nn.dropout(outs_fw, hyper_inputs['keep_rate'])
             with tf.variable_scope('backward_lstm'):
                 #mask = tf.to_float(tf.sequence_mask(xa_inputs['sen_len_bw'], tf.shape(inputs_bw)[1]))
-                outs_bw = self.forward_rnn(inputs_bw, xa_inputs['m_bw'], yz, y_inputs['y'])
+                mask = tf.sequence_mask(xa_inputs['l_bw'], dtype=tf.float32)
+                outs_bw = self.forward_rnn(inputs_bw, mask, yz, y_inputs['y'])
                 outs_bw = tf.nn.dropout(outs_bw, hyper_inputs['keep_rate'])
             
             if self.sharefc:
@@ -451,8 +455,8 @@ class TCDecoder(BaseModel):
         encoding = 'utf8'
         word_to_id = self.word2idx
     
-        x, y, m, p = [], [], [], []
-        x_r, m_r, p_r = [], [], []
+        x, y, m, p, l = [], [], [], [], []
+        x_r, m_r, p_r, l_r = [], [], [], []
         target_words = []
         y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
         for sample in samples:
@@ -497,6 +501,7 @@ class TCDecoder(BaseModel):
                 words_l.extend(target_word)
                 words_l.reverse()
                 x.append(words_l + [0] * (sentence_len - len(words_l)))
+                l.append(len(words_l))
 
                 _m_r = [0] * len(target_word) + [1] * len(words_r)
                 _m_r = _m_r + [0] * (self.max_sentence_len - len(_m_r))
@@ -504,11 +509,13 @@ class TCDecoder(BaseModel):
 
                 words_r = target_word + words_r
                 x_r.append(words_r + [0] * (sentence_len - len(words_r)))
+                l_r.append(len(words_r))
             else:
                 ml = 0
                 words = target_word[:ml] + [1] + words_l + target_word + words_r
                 x.append(words + [0] * (sentence_len - len(words)))
                 m.append([0.] * len(target_word[:ml]) + [0.] + [1.0 if tag == 'O' else 0.0 for tag in sample['tags']] + [0.] * (sentence_len - len(words)))
+                l.append(len(words))
 
                 if self.position == 'binary':
                     p.append([0]*len(target_word[:ml]) + [0] + [1 if tag != 'O' else 0 for tag in sample['tags']] + [0] * (sentence_len - len(words)))
@@ -518,8 +525,10 @@ class TCDecoder(BaseModel):
         if self.bidirection:
             return {'x_fw': np.asarray(x), 
                     'm_fw': np.asarray(m), 
+                    'l_fw': np.asarray(l),
                     'x_bw': np.asarray(x_r),
                     'm_bw': np.asarray(m_r), 
+                    'l_bw': np.asarray(l_r),
                     'target_words': np.asarray(target_words),
                     'y': np.asarray(y),
                     'p_fw': np.clip(np.asarray(p), -10, 10),
@@ -528,6 +537,7 @@ class TCDecoder(BaseModel):
         else:
             return {'x': np.asarray(x),
                     'm': np.asarray(m),
+                    'l': np.asarray(l),
                     'target_words': np.asarray(target_words),
                     'y': np.asarray(y),
                     'p': np.clip(np.asarray(p), -10, 10),
@@ -542,7 +552,7 @@ def main(_):
             '../../../../data/se2014task06/tabsa-rest/dev.pkl',
             '../../../../data/se2014task06/tabsa-rest/test.pkl',]
 
-    data_dir = '../classifier/0617'
+    data_dir = '../classifier/data/0617/'
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
     word2idx, embedding = preprocess_data(fns, '/Users/wdxu/data/glove/glove.6B/glove.6B.300d.txt', data_dir)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
@@ -566,8 +576,8 @@ def main(_):
                 #decoder_type=FLAGS.decoder_type,
                 decoder_type='sclstm',
                 grad_clip=FLAGS.grad_clip,
-                position='distance-add',
-                bidirection=True)
+                position='',
+                bidirection=False)
 
         model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.')
 

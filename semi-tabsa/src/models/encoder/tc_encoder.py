@@ -230,7 +230,7 @@ class TCEncoder(BaseModel):
                     name='bi_lstm_b',
                     shape=[self.n_class],
                     initializer=tf.random_uniform_initializer(-0.003, 0.003),
-                    regularizer=tf.contrib.layers.l2_regularizer(self.l2_reg)
+                    #regularizer=tf.contrib.layers.l2_regularizer(self.l2_reg)
                 )
             }
 

@@ -43,7 +43,7 @@ class BaseModel(object):
     def forward(self, inputs):
         raise NotImplementedError
 
-    def training_op(self, cost, var_list, grad_clip=-1, max_norm=-1, learning_rate=0.001, grads=None):
+    def training_op(self, cost, var_list, grad_clip=-1, max_norm=-1, learning_rate=0.001, grads=None, opt='Adagrad'):
         # ------------- calc gradients --------------------------
         if grads is None:
             grads = tf.gradients(cost, var_list)
@@ -54,8 +54,10 @@ class BaseModel(object):
         grads = [g for g in grads if g is not None]
         if grad_clip > 0: grads = [tf.clip_by_value(g, -grad_clip, grad_clip) for g in grads]
         if max_norm > 0: grads, _ = tf.clip_by_global_norm(grads, max_norm)
-        optimizer = tf.train.AdagradOptimizer(learning_rate)
-        #optimizer = tf.train.AdamOptimizer(learning_rate)
+        if opt == 'Adagrad':
+            optimizer = tf.train.AdagradOptimizer(learning_rate)
+        elif opt == 'Adam':
+            optimizer = tf.train.AdamOptimizer(learning_rate)
 
         if not hasattr(self, 'global_step'):
             self.init_global_step()

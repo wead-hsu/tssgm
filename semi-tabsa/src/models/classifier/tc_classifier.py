@@ -7,6 +7,8 @@ import logging
 import os
 import pickle as pkl
 import numpy as np
+from sklearn.metrics import f1_score
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -117,7 +119,7 @@ class TCClassifier(BaseModel):
                     name='bi_lstm_b',
                     shape=[self.n_class],
                     initializer=tf.random_uniform_initializer(-0.003, 0.003),
-                    regularizer=tf.contrib.layers.l2_regularizer(self.l2_reg)
+                    #regularizer=tf.contrib.layers.l2_regularizer(self.l2_reg)
                 )
             }
 
@@ -166,7 +168,8 @@ class TCClassifier(BaseModel):
                 plhs['sen_len_fw']   = tf.placeholder(tf.int32, [None], name='sen_len_fw')
                 plhs['x_bw']         = tf.placeholder(tf.int32, [None, self.max_sentence_len], name='x_bw')
                 plhs['sen_len_bw']   = tf.placeholder(tf.int32, [None], name='sen_len_bw')
-                plhs['target_words'] = tf.placeholder(tf.int32, [None, 1], name='target_words')
+                plhs['target_words'] = tf.placeholder(tf.int32, [None, 15], name='target_words')
+                plhs['target_mask'] = tf.placeholder(tf.float32, [None, 15], name='target_mask')
             elif tag == 'y':
                 plhs['y']            = tf.placeholder(tf.float32, [None, self.n_class], name='y')
             elif tag == 'hyper':
@@ -179,7 +182,10 @@ class TCClassifier(BaseModel):
         with tf.name_scope('forward'):
             inputs_fw = tf.nn.embedding_lookup(self.embedding, xa_inputs['x_fw'])
             inputs_bw = tf.nn.embedding_lookup(self.embedding, xa_inputs['x_bw'])
-            target = tf.reduce_mean(tf.nn.embedding_lookup(self.embedding, xa_inputs['target_words']), 1, keep_dims=True)
+            target = tf.nn.embedding_lookup(self.embedding, xa_inputs['target_words'])
+            target = tf.reduce_sum(target * xa_inputs['target_mask'][:, :, None], axis=1) / tf.reduce_sum(xa_inputs['target_mask'], axis=1)[:, None]
+            target = target[:, None, :]
+            print(target.shape)
             batch_size = tf.shape(inputs_bw)[0]
             target = tf.zeros([batch_size, self.max_sentence_len, self.embedding_dim]) + target
             inputs_fw = tf.concat([inputs_fw, target], 2)
@@ -201,14 +207,17 @@ class TCClassifier(BaseModel):
         hyper_inputs = self.create_placeholders('hyper')
         print(input_placeholders, hyper_inputs)
         logits = self.forward(input_placeholders, hyper_inputs)
+        pred = tf.argmax(logits, axis=1)
         y = tf.placeholder(tf.int32, [None, self.n_class], 'y')
 
         with tf.name_scope('loss'):
             cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=y))
+            l2 = sum(tf.losses.get_regularization_losses())
+            cost += l2
 
         with tf.name_scope('train'):
             #optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(cost, global_step=self.global_step)
-            optimizer = self.training_op(cost, tf.trainable_variables(), self.grad_clip, 20, self.learning_rate)
+            optimizer = self.training_op(cost, tf.trainable_variables(), self.grad_clip, 20, self.learning_rate, opt='Adam')
 
         with tf.name_scope('predict'):
             pred = tf.argmax(logits, axis=1)
@@ -236,7 +245,8 @@ class TCClassifier(BaseModel):
             ys = [y_dict[sample['polarity']] for sample in samples]
             return ys
 
-        max_acc = 0.
+        max_acc, max_f1 = 0., 0, 
+        idx2y = {0:'positive', 1:'negative', 2:'neutral'}
         for i in range(n_iter):
             #for train, _ in self.get_batch_data(train_data, keep_rate):
             for samples, in train_data:
@@ -248,7 +258,8 @@ class TCClassifier(BaseModel):
                 
                 _, step, summary = sess.run([optimizer, self.global_step, train_summary_op], feed_dict=feed_dict)
                 train_summary_writer.add_summary(summary, step)
-            acc, loss, cnt = 0., 0., 0
+
+            truth, pl, acc, loss, cnt = [], [], 0., 0., 0
             for samples, in test_data:
                 feed_data = self.prepare_data(samples)
                 feed_data.update({'keep_rate': 1.0})
@@ -257,14 +268,16 @@ class TCClassifier(BaseModel):
                 feed_dict.update({y: get_y(samples)})
 
                 num = len(samples)
-                _loss, _acc, summary = sess.run([cost, accuracy, test_summary_op], feed_dict=feed_dict)
+                _pred, _loss, _acc, summary = sess.run([pred, cost, accuracy, test_summary_op], feed_dict=feed_dict)
+                pl.extend([idx2y[int(_)] for _ in _pred])
+                truth.extend([sample['polarity'] for sample in samples])
                 acc += _acc
                 loss += _loss * num
                 cnt += num
-            #print(cnt)
-            #print(acc)
+            
+            f1 = f1_score(truth, pl, average='macro') 
             test_summary_writer.add_summary(summary, step)
-            #print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(step, loss / cnt, acc / cnt))
+            print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}, f1={:.6f}'.format(step, loss / cnt, acc / cnt, f1))
             test_summary_writer.add_summary(summary, step)
             if acc / cnt > max_acc:
                 max_acc = acc / cnt
@@ -303,13 +316,15 @@ class TCClassifier(BaseModel):
     
         x, y, sen_len = [], [], []
         x_r, sen_len_r = [], []
-        target_words = []
+        target_words, target_mask = [], []
         y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
         for sample in samples:
             target_word = [sample['tokens'][i] for i, _ in enumerate(sample['tokens']) if sample['tags'][i] != 'O']
             target_word = list(map(lambda w: word_to_id.get(w, 0), target_word))
-            target_words.append([target_word[0]]) #?????
             
+            target_words.append(target_word[:15] + [0] * (15 - len(target_word[:15])))
+            target_mask.append([1] * len(target_word[:15]) + [0] * (15 - len(target_word[:15])))
+
             if 'polarity' in sample:
                 polarity = sample['polarity']
                 y.append(y_dict[polarity])
@@ -347,21 +362,38 @@ class TCClassifier(BaseModel):
                 'x_bw': np.asarray(x_r),
                 'sen_len_bw':np.asarray(sen_len_r), 
                 'target_words': np.asarray(target_words),
+                'target_mask': np.asarray(target_mask),
                 'y': np.asarray(y),
                 }
     
 def main(_):
-    from src.io.batch_iterator import BatchIterator
-    train = pkl.load(open('../../../../data/se2014task06/tabsa-rest/train.pkl', 'rb'), encoding='latin')
-    test = pkl.load(open('../../../../data/se2014task06/tabsa-rest/test.pkl', 'rb'), encoding='latin')
-    
-    fns = ['../../../../data/se2014task06/tabsa-rest/train.pkl',
-            '../../../../data/se2014task06/tabsa-rest/dev.pkl',
-            '../../../../data/se2014task06/tabsa-rest/test.pkl',]
+    tf.set_random_seed(1234)
+    np.random.seed(1234)
 
-    data_dir = '../unlabel10k/'
+    from src.io.batch_iterator import BatchIterator
+    #train = pkl.load(open('../../../../data/se2014task06/tabsa-rest/train.pkl', 'rb'), encoding='latin')
+    #test = pkl.load(open('../../../../data/se2014task06/tabsa-rest/test.pkl', 'rb'), encoding='latin')
+    
+    #fns = ['../../../../data/se2014task06/tabsa-rest/train.pkl',
+            #'../../../../data/se2014task06/tabsa-rest/dev.pkl',
+            #'../../../../data/se2014task06/tabsa-rest/test.pkl',]
+
+    #train = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/train.pkl', 'rb'), encoding='latin')
+    #test = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/test.pkl', 'rb'), encoding='latin')
+    
+    #fns = ['../../../../data/se2014task06/tabsa-lapt/train.pkl',
+            #'../../../../data/se2014task06/tabsa-lapt/dev.pkl',
+            #'../../../../data/se2014task06/tabsa-lapt/test.pkl',]
+
+    train = pkl.load(open(FLAGS.train_file_path, 'rb'), encoding='latin')
+    test = pkl.load(open(FLAGS.test_file_path, 'rb'), encoding='latin')
+    
+    fns = [FLAGS.train_file_path, FLAGS.test_file_path]
+
+    data_dir = '../data/rest/unlabel10k_filter/'
+    #data_dir = 'data/lapt_labelonly/'
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
-    word2idx, embedding = preprocess_data(fns, '/Users/wdxu/data/glove/glove.6B/glove.6B.300d.txt', data_dir)
+    word2idx, embedding = preprocess_data(fns, '/home/weidi.xwd/workspace//ABSA/data/glove.6B//glove.6B.300d.txt', data_dir)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
     test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=True)
 
@@ -393,14 +425,19 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('max_sentence_len', 80, 'max number of tokens per sentence')
     tf.app.flags.DEFINE_float('l2_reg', 0.001, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
-    tf.app.flags.DEFINE_integer('n_iter', 50, 'number of train iter')
+    tf.app.flags.DEFINE_integer('n_iter', 20, 'number of train iter')
     
-    tf.app.flags.DEFINE_string('train_file_path', 'data/twitter/train.raw', 'training file')
-    tf.app.flags.DEFINE_string('validate_file_path', 'data/twitter/validate.raw', 'validating file')
-    tf.app.flags.DEFINE_string('test_file_path', 'data/twitter/test.raw', 'testing file')
+    #tf.app.flags.DEFINE_string('train_file_path', 'data/twitter/train.raw', 'training file')
+    #tf.app.flags.DEFINE_string('validate_file_path', 'data/twitter/validate.raw', 'validating file')
+    #tf.app.flags.DEFINE_string('test_file_path', 'data/twitter/test.raw', 'testing file')
     #tf.app.flags.DEFINE_string('embedding_file_path', 'data/twitter/twitter_word_embedding_partial_100.txt', 'embedding file')
     #tf.app.flags.DEFINE_string('word_id_file_path', 'data/twitter/word_id.txt', 'word-id mapping file')
-    tf.app.flags.DEFINE_string('type', 'TC', 'model type: ''(default), TD or TC')
+
+    tf.app.flags.DEFINE_string('train_file_path', '../../../../data/se2014task06/tabsa-rest/train.pkl', 'training file')
+    tf.app.flags.DEFINE_string('validate_file_path', '../../../../data/se2014task06/tabsa-rest/dev.pkl', 'validating file')
+    tf.app.flags.DEFINE_string('test_file_path', '../../../../data//se2014task06//tabsa-rest/test.pkl', 'testing file')
+
+    tf.app.flags.DEFINE_string('type', 'TD', 'model type: ''(default), TD or TC')
     tf.app.flags.DEFINE_float('keep_rate', 0.5, 'keep rate')
     tf.app.flags.DEFINE_float('grad_clip', 5.0, 'gradient_clip')
 
