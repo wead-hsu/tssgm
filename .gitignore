@@ -1,7 +1,8 @@
 *.pyc
 *.DS_Store
+semi_tabsa/src/models/unlabel*/
 data/
 MemNet_ABSA/
 TD-LSTM/
 baseline/
-semi_tabsa/semi-tabsa/src/models/unlabel*/
+bilstmcrf/

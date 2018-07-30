@@ -7,10 +7,11 @@ import logging
 import os
 import pickle as pkl
 import numpy as np
+from sklearn.metrics import f1_score
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 UNK_TOKEN = "$unk$"
 ASP_TOKEN = "$t$"
 PAD_TOKEN = "$pad$"
@@ -327,7 +328,7 @@ class MEMClassifier(BaseModel):
                 #    if raw_labels[b] == prediction[b]:
                 #        acc += 1
                 #print(np.sum(correct_pred))
-                return logits, loss, correct_pred, step, summary
+                return logits, data_dict, loss, correct_pred, step, summary
 
         max_acc = 0.
         for i in range(n_iter):
@@ -343,15 +344,19 @@ class MEMClassifier(BaseModel):
             train_loss /= train_cnt
             train_acc /= train_cnt
             acc, loss, cnt = 0., 0., 0
+            y_true = []
+            y_pred = []
             for samples, in test_data:
                 num = len(samples)
-                logits, _loss, correct_pred, step, summary = fetch_results(samples, test=True)
+                logits, data_dict, _loss, correct_pred, step, summary = fetch_results(samples, test=True)
                 #acc += np.sum(np.argmax(logits,1) == d)
                 acc += correct_pred
                 loss += _loss * num 
                 cnt += num
+                y_pred.extend(list(np.argmax(logits,1)))
+                y_true.extend(list(data_dict['y']))
             test_summary_writer.add_summary(summary, step)
-            print('Iter {}: mini-batch train_loss={:.6f}, train acc={:.6f}, test_loss={:.6f}, test acc={:.6f}'.format(step, train_loss , train_acc, loss / cnt,  acc / cnt))
+            print('Iter {}: mini-batch train_loss={:.6f}, train acc={:.6f}, test_loss={:.6f}, test acc={:.6f}, test f1={:.6f}'.format(step, train_loss , train_acc, loss / cnt,  acc / cnt, f1_score(y_true, y_pred, average='macro')))
             if acc / cnt > max_acc:
                 max_acc = acc / cnt
         print('Optimization Finished! Max acc={}'.format(max_acc))
@@ -456,14 +461,14 @@ class MEMClassifier(BaseModel):
     
 def main(_):
     from src.io.batch_iterator import BatchIterator
-    train = pkl.load(open('../../../../data/se2014task06/tabsa-rest/train.pkl', 'rb'), encoding='latin')
-    test = pkl.load(open('../../../../data/se2014task06/tabsa-rest/test.pkl', 'rb'), encoding='latin')
+    train = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/train.pkl', 'rb'), encoding='latin')
+    test = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/test.pkl', 'rb'), encoding='latin')
     
-    fns = ['../../../../data/se2014task06/tabsa-rest/train.pkl',
-            '../../../../data/se2014task06/tabsa-rest/dev.pkl',
-            '../../../../data/se2014task06/tabsa-rest/test.pkl',]
+    fns = ['../../../../data/se2014task06/tabsa-lapt/train.pkl',
+            '../../../../data/se2014task06/tabsa-lapt/dev.pkl',
+            '../../../../data/se2014task06/tabsa-lapt/test.pkl',]
 
-    data_dir = '../unlabel10k'
+    data_dir = '../unlabel_lapt_10k'
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
     word2idx, target2idx, word_embedding, target_embedding = preprocess_data(fns, '../../../../data/glove.6B/glove.6B.300d.txt', data_dir)
     word_embedding = np.concatenate([word_embedding, np.zeros([1, FLAGS.embedding_dim])])
@@ -504,7 +509,7 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('n_hidden', 200, 'number of hidden unit')
     tf.app.flags.DEFINE_float('learning_rate', 0.01, 'learning rate')
     tf.app.flags.DEFINE_integer('n_class', 3, 'number of distinct class')
-    tf.app.flags.DEFINE_integer('max_sentence_len', 79, 'max number of tokens per sentence')
+    tf.app.flags.DEFINE_integer('max_sentence_len', 95, 'max number of tokens per sentence')
     tf.app.flags.DEFINE_float('l2_reg', 0.001, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
     tf.app.flags.DEFINE_integer('n_iter', 100, 'number of train iter')

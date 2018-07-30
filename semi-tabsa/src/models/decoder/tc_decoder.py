@@ -209,7 +209,7 @@ class TCDecoder(BaseModel):
             dec_outs, _ = tf.nn.dynamic_rnn(
                     cell=cell,
                     inputs=emb_inp,
-                    sequence_length=tf.to_int32(tf.reduce_sum(mask, axis=1)),
+                    sequence_length=tf.to_int32(tf.reduce_sum(tf.to_float(mask), axis=1)),
                     initial_state=tf.contrib.rnn.LSTMStateTuple(init_state, init_state)
                     )
 

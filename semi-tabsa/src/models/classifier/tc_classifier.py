@@ -61,9 +61,12 @@ def preprocess_data(fns, pretrain_fn, data_dir):
             dim_emb = len(pretrained_vectors[list(pretrained_vectors.keys())[0]])
             def build_emb(pretrained_vectors, word2idx):
                 emb_init = np.random.randn(len(word2idx), dim_emb) * 1e-2
+                cnt = 0
                 for w in word2idx:
                     if w in pretrained_vectors:
+                        cnt += 1
                         emb_init[word2idx[w]] = pretrained_vectors[w]
+                print(cnt)
                 return emb_init
             emb_init_sent = build_emb(pretrained_vectors, word2idx_sent).astype('float32')
             with open(os.path.join(data_dir, 'emb_sent.pkl'), 'wb') as f:
@@ -96,7 +99,8 @@ class TCClassifier(BaseModel):
             self.embedding = tf.get_variable('embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(embedding))
         elif isinstance(embedding, np.ndarray):
             logger.info('Numerical embedding is given with shape {}'.format(str(embedding.shape)))
-            self.embedding = tf.constant(embedding, name='embedding')
+            #self.embedding = tf.constant(embedding, name='embedding')
+            self.embedding = tf.get_variable('embedding', [len(word2idx), embedding_dim], initializer=tf.constant_initializer(embedding), trainable=False)
         elif isinstance(embedding, tf.Tensor) or isinstance(embedding, tf.Variable):
             logger.info('Import tensor as the embedding: '.format(embedding.name))
             self.embedding = embedding
@@ -367,54 +371,62 @@ class TCClassifier(BaseModel):
                 }
     
 def main(_):
-    tf.set_random_seed(1234)
-    np.random.seed(1234)
-
-    from src.io.batch_iterator import BatchIterator
-    #train = pkl.load(open('../../../../data/se2014task06/tabsa-rest/train.pkl', 'rb'), encoding='latin')
-    #test = pkl.load(open('../../../../data/se2014task06/tabsa-rest/test.pkl', 'rb'), encoding='latin')
+    tf.reset_default_graph()
+    g = tf.Graph()
+    with g.as_default():
+        tf.set_random_seed(1234)
+        np.random.seed(1234)
     
-    #fns = ['../../../../data/se2014task06/tabsa-rest/train.pkl',
-            #'../../../../data/se2014task06/tabsa-rest/dev.pkl',
-            #'../../../../data/se2014task06/tabsa-rest/test.pkl',]
-
-    #train = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/train.pkl', 'rb'), encoding='latin')
-    #test = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/test.pkl', 'rb'), encoding='latin')
+        from src.io.batch_iterator import BatchIterator
+        #train = pkl.load(open('../../../../data/se2014task06/tabsa-rest/train.pkl', 'rb'), encoding='latin')
+        #test = pkl.load(open('../../../../data/se2014task06/tabsa-rest/test.pkl', 'rb'), encoding='latin')
+        
+        #fns = ['../../../../data/se2014task06/tabsa-rest/train.pkl',
+                #'../../../../data/se2014task06/tabsa-rest/dev.pkl',
+                #'../../../../data/se2014task06/tabsa-rest/test.pkl',]
     
-    #fns = ['../../../../data/se2014task06/tabsa-lapt/train.pkl',
-            #'../../../../data/se2014task06/tabsa-lapt/dev.pkl',
-            #'../../../../data/se2014task06/tabsa-lapt/test.pkl',]
-
-    train = pkl.load(open(FLAGS.train_file_path, 'rb'), encoding='latin')
-    test = pkl.load(open(FLAGS.test_file_path, 'rb'), encoding='latin')
+        #train = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/train.pkl', 'rb'), encoding='latin')
+        #test = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/test.pkl', 'rb'), encoding='latin')
+        
+        #fns = ['../../../../data/se2014task06/tabsa-lapt/train.pkl',
+                #'../../../../data/se2014task06/tabsa-lapt/dev.pkl',
+                #'../../../../data/se2014task06/tabsa-lapt/test.pkl',]
     
-    fns = [FLAGS.train_file_path, FLAGS.test_file_path]
-
-    data_dir = '../data/rest/unlabel10k_filter/'
-    #data_dir = 'data/lapt_labelonly/'
-    #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
-    word2idx, embedding = preprocess_data(fns, '/home/weidi.xwd/workspace//ABSA/data/glove.6B//glove.6B.300d.txt', data_dir)
-    train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
-    test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=True)
-
-    configproto = tf.ConfigProto()
-    configproto.gpu_options.allow_growth = True
-    configproto.allow_soft_placement = True
-    with tf.Session(config=configproto) as sess:
-        tf.global_variables_initializer().run()
-
-        model = TCClassifier(word2idx=word2idx, 
-                embedding_dim=FLAGS.embedding_dim, 
-                n_hidden=FLAGS.n_hidden, 
-                learning_rate=FLAGS.learning_rate, 
-                n_class=FLAGS.n_class, 
-                max_sentence_len=FLAGS.max_sentence_len, 
-                l2_reg=FLAGS.l2_reg, 
-                embedding=embedding,
-                grad_clip=FLAGS.grad_clip)
-	
-        model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.')
-
+        train = pkl.load(open(FLAGS.train_file_path, 'rb'), encoding='latin')
+        test = pkl.load(open(FLAGS.test_file_path, 'rb'), encoding='latin')
+        
+        fns = [FLAGS.train_file_path, FLAGS.test_file_path]
+    
+        #data_dir = '../data/rest/unlabel10k_filter/'
+        #data_dir = '../data/rest/cbow_labelonly/'
+        #data_dir = 'data/lapt_labelonly/'
+        data_dir = '../data/lapt/cbow_labelonly'
+        #data_dir = '../data/lapt/unlabel10k_filter/'
+        #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
+        #word2idx, embedding = preprocess_data(fns, '/home/weidi.xwd/workspace//ABSA/data/glove.7B//glove.6B.300d.txt', data_dir)
+        #word2idx, embedding = preprocess_data(fns, '/home/fanyin.cxy/ABSA/data/word2vec//cbow.unlabel.300d.txt', data_dir)
+        word2idx, embedding = preprocess_data(fns, '/home/weidi.xwd/workspace/ABSA/data/se2014task06/tabsa-lapt/cbow.unlabel.300d.txt', data_dir)
+        train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
+        test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=True)
+    
+        configproto = tf.ConfigProto()
+        configproto.gpu_options.allow_growth = True
+        configproto.allow_soft_placement = True
+        with tf.Session(config=configproto) as sess:
+            tf.global_variables_initializer().run()
+    
+            model = TCClassifier(word2idx=word2idx, 
+                    embedding_dim=FLAGS.embedding_dim, 
+                    n_hidden=FLAGS.n_hidden, 
+                    learning_rate=FLAGS.learning_rate, 
+                    n_class=FLAGS.n_class, 
+                    max_sentence_len=FLAGS.max_sentence_len, 
+                    l2_reg=FLAGS.l2_reg, 
+                    embedding=embedding,
+                    grad_clip=FLAGS.grad_clip)
+    	
+            model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, '.')
+    
 if __name__ == '__main__':
     FLAGS = tf.app.flags.FLAGS
     tf.app.flags.DEFINE_integer('embedding_dim', 300, 'dimension of word embedding')
@@ -422,10 +434,10 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('n_hidden', 200, 'number of hidden unit')
     tf.app.flags.DEFINE_float('learning_rate', 0.01, 'learning rate')
     tf.app.flags.DEFINE_integer('n_class', 3, 'number of distinct class')
-    tf.app.flags.DEFINE_integer('max_sentence_len', 80, 'max number of tokens per sentence')
-    tf.app.flags.DEFINE_float('l2_reg', 0.001, 'l2 regularization')
+    tf.app.flags.DEFINE_integer('max_sentence_len', 90, 'max number of tokens per sentence')
+    tf.app.flags.DEFINE_float('l2_reg', 0.01, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
-    tf.app.flags.DEFINE_integer('n_iter', 20, 'number of train iter')
+    tf.app.flags.DEFINE_integer('n_iter', 50, 'number of train iter')
     
     #tf.app.flags.DEFINE_string('train_file_path', 'data/twitter/train.raw', 'training file')
     #tf.app.flags.DEFINE_string('validate_file_path', 'data/twitter/validate.raw', 'validating file')
@@ -433,9 +445,9 @@ if __name__ == '__main__':
     #tf.app.flags.DEFINE_string('embedding_file_path', 'data/twitter/twitter_word_embedding_partial_100.txt', 'embedding file')
     #tf.app.flags.DEFINE_string('word_id_file_path', 'data/twitter/word_id.txt', 'word-id mapping file')
 
-    tf.app.flags.DEFINE_string('train_file_path', '../../../../data/se2014task06/tabsa-rest/train.pkl', 'training file')
-    tf.app.flags.DEFINE_string('validate_file_path', '../../../../data/se2014task06/tabsa-rest/dev.pkl', 'validating file')
-    tf.app.flags.DEFINE_string('test_file_path', '../../../../data//se2014task06//tabsa-rest/test.pkl', 'testing file')
+    tf.app.flags.DEFINE_string('train_file_path', '../../../../data/se2014task06/tabsa-lapt/train.pkl', 'training file')
+    tf.app.flags.DEFINE_string('validate_file_path', '../../../../data/se2014task06/tabsa-lapt/dev.pkl', 'validating file')
+    tf.app.flags.DEFINE_string('test_file_path', '../../../../data//se2014task06//tabsa-lapt/test.pkl', 'testing file')
 
     tf.app.flags.DEFINE_string('type', 'TD', 'model type: ''(default), TD or TC')
     tf.app.flags.DEFINE_float('keep_rate', 0.5, 'keep rate')
