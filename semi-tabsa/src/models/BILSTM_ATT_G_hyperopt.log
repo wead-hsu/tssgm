@@ -1,0 +1,4 @@
+trial_counter,acc,f1_marco,alpha,batch_size,bidirection_dec,bidirection_enc,decoder_type,dim_z,grad_clip,keep_rate,l2_reg,learning_rate,n_hidden,n_hidden_ae,n_iter,n_unlabel,position_dec,position_enc,task
+1,0.6906,0.0000,7.0,128,False,True,lstm,80.0,30.0,0.7000000000000001,0.001,0.07,200,100,2.0,7000.0,distance,distance,BILSTM_ATT_G
+2,0.7109,0.0000,8.0,32,True,False,lstm,80.0,40.0,0.5,0.001,0.05,300,100,7.0,7000.0,distance,,BILSTM_ATT_G
+3,0.6844,0.0000,8.0,32,True,False,lstm,80.0,30.0,0.7000000000000001,0.001,0.09,200,100,6.0,8000.0,distance,distance,BILSTM_ATT_G
