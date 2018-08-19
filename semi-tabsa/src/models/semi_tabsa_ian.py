@@ -15,7 +15,7 @@ import numpy as np
 import os
 import logging
 from collections import Counter
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -323,8 +323,8 @@ class SemiTABSA(BaseModel):
                 elbo_u.append(_elbo_u)
 
         self.loss_u = tf.add_n([elbo_u[idx] * predict_u[:, idx] for idx in range(self.n_class)]) + classifier_entropy_u
-        #self.loss = tf.reduce_mean(self.loss_l + classifier_loss_l * alpha + self.loss_u)
-        self.loss = tf.reduce_mean(classifier_loss_l) 
+        self.loss = tf.reduce_mean(self.loss_l + classifier_loss_l * alpha + self.loss_u)
+        #self.loss = tf.reduce_mean(classifier_loss_l) 
         decoder_loss_l = tf.reduce_mean(decoder_loss_l)
 
         with tf.name_scope('train'):
@@ -351,7 +351,7 @@ class SemiTABSA(BaseModel):
         logger = ExpLogger('semi_tabsa', save_dir)
         logger.write_args(FLAGS)
         logger.write_variables(tf.trainable_variables())
-        logger.file_copy(['semi_tabsa.py', 'encoder/*.py', 'decoder/*.py', 'classifier/*.py'])
+        logger.file_copy(['*.py', 'encoder/*.py', 'decoder/*.py', 'classifier/*.py'])
 
         train_summary_writer = tf.summary.FileWriter(save_dir + '/train', sess.graph)
         test_summary_writer = tf.summary.FileWriter(save_dir + '/test', sess.graph)
@@ -426,46 +426,45 @@ class SemiTABSA(BaseModel):
                 train_summary_writer.add_summary(summary, _step)
                 #if np.random.rand() < 1/4:
                 #    print(_acc, _loss, _ppl, _step)
-            
-            acc, ppl, loss, cnt = 0., 0., 0., 0
-            for samples, in test_data:
-                feed_dict_clf_l = get_feed_dict_help(plhs=[self.classifier_xa_l, self.classifier_y_l, self.classifier_hyper_l],
-                        data_dict=self.classifier.prepare_data(samples),
-                        keep_rate=1.0,
-                        is_training=False)
                 
-                feed_dict_enc_l = get_feed_dict_help(plhs=[self.encoder_xa_l, self.encoder_y_l, self.encoder_hyper_l],
-                        data_dict=self.encoder.prepare_data(samples),
-                        keep_rate=1.0,
-                        is_training=False)
- 
-                feed_dict_dec_l = get_feed_dict_help(plhs=[self.decoder_xa_l, self.decoder_y_l, self.decoder_hyper_l],
-                        data_dict=self.decoder.prepare_data(samples),
-                        keep_rate=1.0,
-                        is_training=False)
-
-                feed_dict = {}
-                feed_dict.update(feed_dict_clf_l)
-                feed_dict.update(feed_dict_enc_l)
-                feed_dict.update(feed_dict_dec_l)
-                feed_dict.update({self.klw: 0})
-
-                num = 1
-                _acc, _loss, _ppl, _step = sess.run([classifier_acc_l, decoder_loss_l, ppl_l, self.global_step], feed_dict=feed_dict)
-                acc += _acc
-                ppl += _ppl
-                loss += _loss * num
-                cnt += num
-            #print(cnt)
-            #print(acc)
-            summary, _step = sess.run([test_summary_op, self.global_step], feed_dict={test_acc: acc/cnt, test_ppl: ppl/cnt})
-            test_summary_writer.add_summary(summary, _step)
-            logger.info('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(_step, loss / cnt, acc / cnt))
-            print(save_dir)
-            _dir="unlabel10k" 
-            if acc / cnt > max_acc:
-                max_acc = acc / cnt
- 
+                acc, ppl, loss, cnt = 0., 0., 0., 0
+                for samples, in test_data:
+                    feed_dict_clf_l = get_feed_dict_help(plhs=[self.classifier_xa_l, self.classifier_y_l, self.classifier_hyper_l],
+                            data_dict=self.classifier.prepare_data(samples),
+                            keep_rate=1.0,
+                            is_training=False)
+                    
+                    feed_dict_enc_l = get_feed_dict_help(plhs=[self.encoder_xa_l, self.encoder_y_l, self.encoder_hyper_l],
+                            data_dict=self.encoder.prepare_data(samples),
+                            keep_rate=1.0,
+                            is_training=False)
+     
+                    feed_dict_dec_l = get_feed_dict_help(plhs=[self.decoder_xa_l, self.decoder_y_l, self.decoder_hyper_l],
+                            data_dict=self.decoder.prepare_data(samples),
+                            keep_rate=1.0,
+                            is_training=False)
+    
+                    feed_dict = {}
+                    feed_dict.update(feed_dict_clf_l)
+                    feed_dict.update(feed_dict_enc_l)
+                    feed_dict.update(feed_dict_dec_l)
+                    feed_dict.update({self.klw: 0})
+    
+                    _acc, _loss, _ppl, _step = sess.run([classifier_acc_l, decoder_loss_l, ppl_l, self.global_step], feed_dict=feed_dict)
+                    acc += _acc * len(samples)
+                    ppl += _ppl * len(samples)
+                    loss += _loss * len(samples)
+                    cnt += len(samples)
+                #print(cnt)
+                #print(acc)
+                summary, _step = sess.run([test_summary_op, self.global_step], feed_dict={test_acc: acc/cnt, test_ppl: ppl/cnt})
+                test_summary_writer.add_summary(summary, _step)
+                logger.info('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}'.format(_step, loss / cnt, acc / cnt))
+                #print(save_dir)
+                _dir="unlabel10k" 
+                if acc / cnt > max_acc:
+                    max_acc = acc / cnt
+     
         logger.info('Optimization Finished! Max acc={}'.format(max_acc))
 
         logger.info('Learning_rate={}, iter_num={}, hidden_num={}, l2={}'.format(
@@ -481,7 +480,7 @@ def main(_):
     import time, datetime
     timestamp = str(int(time.time()))
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    save_dir = FLAGS.save_dir + '/logs/' + str(timestamp) + '_' + 'ctype'+FLAGS.classifier_type + '_r' +  str(FLAGS.learning_rate) + '_l' + str(FLAGS.l2_reg)\
+    save_dir = FLAGS.save_dir + '/' + str(timestamp) + '_' + 'ctype'+FLAGS.classifier_type + '_r' +  str(FLAGS.learning_rate) + '_l' + str(FLAGS.l2_reg)\
                 + '_alpha' + str(FLAGS.alpha) + '_batchsize' + str(FLAGS.batch_size) + '_hidae' + str(FLAGS.n_hidden_ae)\
                 + '_dimz' + str(FLAGS.dim_z)  + '_dec' + str(FLAGS.decoder_type) + '_unlabel' + str(FLAGS.n_unlabel)\
                 + '_positionenc' + str(FLAGS.position_enc) + '_bidirectionenc' + str(FLAGS.bidirection_enc)\
@@ -507,7 +506,7 @@ def main(_):
     
     fns = [FLAGS.train_file_path,  FLAGS.test_file_path, FLAGS.unlabel_file_path]
 
-    data_dir = 'unlabel10k'
+    data_dir = 'data/rest/ian/'
     #emb_file = "../../../data/word2vec/cbow.unlabel.300d.txt"
     emb_file = "../../../data/glove.6B/glove.6B.300d.txt"
     #emb_file = "../../../data/glove.840B/glove.840B.300d.txt"
@@ -559,7 +558,7 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_float('l2_reg', 0.00001, 'l2 regularization')
     tf.app.flags.DEFINE_integer('display_step', 4, 'number of test display step')
     tf.app.flags.DEFINE_integer('n_iter', 100, 'number of train iter')
-    tf.app.flags.DEFINE_integer('n_unlabel', 10000, 'number of unlabeled')
+    tf.app.flags.DEFINE_integer('n_unlabel', 5000, 'number of unlabeled')
     
     tf.app.flags.DEFINE_string('train_file_path', '../../../data/se2014task06/tabsa-rest/train.pkl', 'training file')
     tf.app.flags.DEFINE_string('unlabel_file_path', '../../../data/se2014task06/tabsa-rest/unlabel.clean.pkl', 'training file')
@@ -567,14 +566,14 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_string('test_file_path', '../../../data/se2014task06/tabsa-rest/test.pkl', 'training file')
     tf.app.flags.DEFINE_string('classifier_type', 'IAN', 'model type: ''(default), MEM or TD or TC or BILSTM_ATT_G')
     tf.app.flags.DEFINE_float('keep_rate', 0.5, 'keep rate')
-    tf.app.flags.DEFINE_string('decoder_type', 'lstm', '[sclstm, lstm]')
+    tf.app.flags.DEFINE_string('decoder_type', 'fclstm', '[sclstm, lstm]')
     tf.app.flags.DEFINE_float('grad_clip', 5, 'gradient_clip, <0 == None')
     tf.app.flags.DEFINE_integer('dim_z', 50, 'dimension of z latent variable')
-    tf.app.flags.DEFINE_float('alpha', 2.0, 'weight of alpha')
-    tf.app.flags.DEFINE_string('save_dir', '.', 'directory of save file')
-    tf.app.flags.DEFINE_string('position_enc', '', '[binary, distance, ], None for no position embedding')
-    tf.app.flags.DEFINE_boolean('bidirection_enc', False, 'boolean')
-    tf.app.flags.DEFINE_string('position_dec', '', '[binary, distance, ], None for no position embedding')
-    tf.app.flags.DEFINE_boolean('bidirection_dec', False , 'boolean')
+    tf.app.flags.DEFINE_float('alpha', 50.0, 'weight of alpha')
+    tf.app.flags.DEFINE_string('save_dir', 'logs/', 'directory of save file')
+    tf.app.flags.DEFINE_string('position_enc', 'distance', '[binary, distance, ], None for no position embedding')
+    tf.app.flags.DEFINE_boolean('bidirection_enc', True, 'boolean')
+    tf.app.flags.DEFINE_string('position_dec', 'distance', '[binary, distance, ], None for no position embedding')
+    tf.app.flags.DEFINE_boolean('bidirection_dec', True , 'boolean')
 
     tf.app.run()

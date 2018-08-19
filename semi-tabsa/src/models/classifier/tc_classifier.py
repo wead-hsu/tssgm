@@ -263,46 +263,46 @@ class TCClassifier(BaseModel):
                 _, step, summary = sess.run([optimizer, self.global_step, train_summary_op], feed_dict=feed_dict)
                 train_summary_writer.add_summary(summary, step)
 
-            truth, pl, acc, loss, cnt = [], [], 0., 0., 0
-            for samples, in test_data:
-                feed_data = self.prepare_data(samples)
-                feed_data.update({'keep_rate': 1.0})
-                input_placeholders.update(hyper_inputs)
-                feed_dict = self.get_feed_dict(input_placeholders, feed_data)
-                feed_dict.update({y: get_y(samples)})
-
-                num = len(samples)
-                _pred, _loss, _acc, summary = sess.run([pred, cost, accuracy, test_summary_op], feed_dict=feed_dict)
-                pl.extend([idx2y[int(_)] for _ in _pred])
-                truth.extend([sample['polarity'] for sample in samples])
-                acc += _acc
-                loss += _loss * num
-                cnt += num
-            
-            f1 = f1_score(truth, pl, average='macro') 
-            test_summary_writer.add_summary(summary, step)
-            print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}, f1={:.6f}'.format(step, loss / cnt, acc / cnt, f1))
-            test_summary_writer.add_summary(summary, step)
-            if acc / cnt > max_acc:
-                max_acc = acc / cnt
-                with open(os.path.join(_dir, 'pred'), 'w') as f:
-                    idx2y = {0:'positive', 1:'negative', 2:'neutral'}
-                    print(_dir)
-                    for samples, in test_data:
-                        feed_data = self.prepare_data(samples)
-                        feed_data.update({'keep_rate': 1.0})
-                        input_placeholders.update(hyper_inputs)
-                        feed_dict = self.get_feed_dict(input_placeholders, feed_data)
-                        feed_dict.update({y: get_y(samples)})
-                        _pred, = sess.run([pred], feed_dict=feed_dict)
-                        for idx, sample in enumerate(samples):
-                            f.write(idx2y[_pred[idx]])
-                            f.write('\t')
-                            f.write(sample['polarity'])
-                            f.write('\t')
-                            f.write(' '.join([t + ' ' + str(b) for (t, b) in zip(sample['tokens'], sample['tags'])]))
-                            f.write('\n')
-
+                truth, pl, acc, loss, cnt = [], [], 0., 0., 0
+                for samples, in test_data:
+                    feed_data = self.prepare_data(samples)
+                    feed_data.update({'keep_rate': 1.0})
+                    input_placeholders.update(hyper_inputs)
+                    feed_dict = self.get_feed_dict(input_placeholders, feed_data)
+                    feed_dict.update({y: get_y(samples)})
+    
+                    num = len(samples)
+                    _pred, _loss, _acc, summary = sess.run([pred, cost, accuracy, test_summary_op], feed_dict=feed_dict)
+                    pl.extend([idx2y[int(_)] for _ in _pred])
+                    truth.extend([sample['polarity'] for sample in samples])
+                    acc += _acc
+                    loss += _loss * num
+                    cnt += num
+                
+                f1 = f1_score(truth, pl, average='macro') 
+                test_summary_writer.add_summary(summary, step)
+                print('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}, f1={:.6f}'.format(step, loss / cnt, acc / cnt, f1))
+                test_summary_writer.add_summary(summary, step)
+                if acc / cnt > max_acc:
+                    max_acc = acc / cnt
+                    with open(os.path.join(_dir, 'pred'), 'w') as f:
+                        idx2y = {0:'positive', 1:'negative', 2:'neutral'}
+                        print(_dir)
+                        for samples, in test_data:
+                            feed_data = self.prepare_data(samples)
+                            feed_data.update({'keep_rate': 1.0})
+                            input_placeholders.update(hyper_inputs)
+                            feed_dict = self.get_feed_dict(input_placeholders, feed_data)
+                            feed_dict.update({y: get_y(samples)})
+                            _pred, = sess.run([pred], feed_dict=feed_dict)
+                            for idx, sample in enumerate(samples):
+                                f.write(idx2y[_pred[idx]])
+                                f.write('\t')
+                                f.write(sample['polarity'])
+                                f.write('\t')
+                                f.write(' '.join([t + ' ' + str(b) for (t, b) in zip(sample['tokens'], sample['tags'])]))
+                                f.write('\n')
+    
         print('Optimization Finished! Max acc={}'.format(max_acc))
 
         print('Learning_rate={}, iter_num={}, hidden_num={}, l2={}'.format(

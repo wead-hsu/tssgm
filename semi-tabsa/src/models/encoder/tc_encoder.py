@@ -411,6 +411,9 @@ class TCEncoder(BaseModel):
         target_words = []
 
         y_dict = {'positive': [1,0,0], 'negative': [0, 1, 0], 'neutral': [0, 0, 1]}
+        if self.n_class == 2:
+            y_dict = {'positive': [1,0], 'negative': [0, 1],}
+
         for sample in samples:
             target_word = [sample['tokens'][i] for i, _ in enumerate(sample['tokens']) if sample['tags'][i] != 'O']
             target_word = list(map(lambda w: word_to_id.get(w, 0), target_word))

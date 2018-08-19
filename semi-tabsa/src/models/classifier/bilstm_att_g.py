@@ -531,15 +531,16 @@ class BilstmAttGClassifier(BaseModel):
     
 def main(_):
     from src.io.batch_iterator import BatchIterator
-    train = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/train.pkl', 'rb'), encoding='latin')
-    test = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/test.pkl', 'rb'), encoding='latin')
+    train = pkl.load(open('../../../../data/se2014task06/tabsa-rest/train.pkl', 'rb'), encoding='latin')
+    test = pkl.load(open('../../../../data/se2014task06/tabsa-rest/test.pkl', 'rb'), encoding='latin')
     
-    fns = ['../../../../data/se2014task06/tabsa-lapt/train.pkl',
-            '../../../../data/se2014task06/tabsa-lapt/dev.pkl',
-            '../../../../data/se2014task06/tabsa-lapt/test.pkl',]
+    fns = ['../../../../data/se2014task06/tabsa-rest/train.pkl',
+            '../../../../data/se2014task06/tabsa-rest/dev.pkl',
+            '../../../../data/se2014task06/tabsa-rest/test.pkl',]
 
-    data_dir = '../unlabel_lapt_10k'
+    #data_dir = '../unlabel_rest_10k'
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
+    data_dir = '../data/rest/bilstmattg-cbow/'
     word2idx, embedding = preprocess_data(fns, '/Users/wdxu/data/glove/glove.6B/glove.6B.300d.txt', data_dir)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
     test_it = BatchIterator(len(test), FLAGS.batch_size, [test], testing=False)

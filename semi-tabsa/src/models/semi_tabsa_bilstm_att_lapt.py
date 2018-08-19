@@ -15,7 +15,7 @@ import os
 import logging
 from collections import Counter
 from sklearn.metrics import f1_score
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -351,7 +351,7 @@ class SemiTABSA(BaseModel):
         logger = ExpLogger('semi_tabsa', save_dir)
         logger.write_args(FLAGS)
         logger.write_variables(tf.trainable_variables())
-        logger.file_copy(['semi_tabsa.py', 'encoder/*.py', 'decoder/*.py', 'classifier/*.py'])
+        logger.file_copy(['*.py', 'encoder/*.py', 'decoder/*.py', 'classifier/*.py'])
 
         train_summary_writer = tf.summary.FileWriter(save_dir + '/train', sess.graph)
         test_summary_writer = tf.summary.FileWriter(save_dir + '/test', sess.graph)
@@ -512,10 +512,12 @@ def main(_):
     
     fns = [FLAGS.train_file_path,  FLAGS.test_file_path, FLAGS.unlabel_file_path]
 
-    data_dir = 'unlabel_lapt_10k'
+    #data_dir = 'data/lapt/bilstmattg-cbow/'
+    data_dir = 'data/lapt/bilstmattg/'
     #emb_file = "../../../data/word2vec/cbow.unlabel.300d.txt"
     emb_file = "../../../data/glove.6B/glove.6B.300d.txt"
     #emb_file = "../../../data/glove.840B/glove.840B.300d.txt"
+    #emb_file = "../../../data/se2014task06//tabsa-lapt/cbow.unlabel.300d.txt"
     word2idx, target2idx, word_embedding, target_embedding = preprocess_data(fns, emb_file, data_dir, FLAGS)
     train_it = BatchIterator(len(train), FLAGS.batch_size, [train], testing=False)
     unlabel_it = BatchIterator(len(unlabel), FLAGS.batch_size, [unlabel], testing=False)
@@ -572,7 +574,7 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_string('test_file_path', '../../../data/se2014task06/tabsa-lapt/test.pkl', 'training file')
     tf.app.flags.DEFINE_string('classifier_type', 'BILSTM_ATT_G', 'model type: ''(default), MEM or TD or TC or BILSTM_ATT_G')
     tf.app.flags.DEFINE_float('keep_rate', 0.5, 'keep rate')
-    tf.app.flags.DEFINE_string('decoder_type', 'lstm', '[sclstm, lstm]')
+    tf.app.flags.DEFINE_string('decoder_type', 'fclstm', '[sclstm, lstm]')
     tf.app.flags.DEFINE_float('grad_clip', 100, 'gradient_clip, <0 == None')
     tf.app.flags.DEFINE_integer('dim_z', 50, 'dimension of z latent variable')
     tf.app.flags.DEFINE_float('alpha', 5.0, 'weight of alpha')

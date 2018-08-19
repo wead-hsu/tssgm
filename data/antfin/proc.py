@@ -4,6 +4,7 @@ import jieba
 import numpy as np
 import os
 import pickle as pkl
+from collections import Counter
 
 content = 'content'
 tag = '菜名'
@@ -80,7 +81,7 @@ def proc(data, save_dir = '.'):
             elif polarity == '负向':
                 polarity = 'negative'
             elif polarity == '中立':
-                polarity = 'neutral'
+                polarity = 'negative'
             else:
                 continue
 
@@ -140,7 +141,8 @@ def proc(data, save_dir = '.'):
     #for _, sentence in test_data.iterrows():
         #data_sample, _, _ = proc_sentence(sentence)
         #test_samples.extend(data_sample)
-
+    
+    print(Counter([s['polarity'] for s in train_samples]))
 
     random_index = np.random.permutation(len(train_samples))
     samples = [train_samples[idx] for idx in random_index]
@@ -158,7 +160,7 @@ def proc(data, save_dir = '.'):
     
     def save_data(data, fn):
         data_fn = os.path.join(save_dir, fn)
-        if os.path.exists(data_fn):
+        if not os.path.exists(data_fn):
             print('data already exists', fn)
         else:
             pkl.dump(data, open(data_fn, 'wb'))

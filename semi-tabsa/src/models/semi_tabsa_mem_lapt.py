@@ -455,7 +455,7 @@ class SemiTABSA(BaseModel):
             if acc / cnt > 0.78:
                 logger.info('Iter {}: mini-batch loss={:.6f}, test acc={:.6f}, test f1={:.6f}'.format(_step, loss / cnt, acc / cnt, f1_score(y_true, y_pred, average="macro")))
             #print(save_dir)
-            _dir="unlabel_lapt_10k" 
+            _dir="unlabel_rest_10k" 
             if acc / cnt > max_acc:
                 max_acc = acc / cnt
  
@@ -500,7 +500,7 @@ def main(_):
     
     fns = [FLAGS.train_file_path,  FLAGS.test_file_path, FLAGS.unlabel_file_path]
 
-    data_dir = 'unlabel_lapt_10k'
+    data_dir = 'data/lapt/memnet/'
     #emb_file = "../../../data/word2vec/cbow.unlabel.300d.txt"
     emb_file = "../../../data/glove.6B/glove.6B.300d.txt"
     #emb_file = "../../../data/glove.840B/glove.840B.300d.txt"
@@ -558,10 +558,10 @@ if __name__ == '__main__':
     #tf.app.flags.DEFINE_string('unlabel_file_path', '../../../data/se2014task06/tabsa-rest/unlabel.clean.pkl', 'training file')
     #tf.app.flags.DEFINE_string('validate_file_path', '../../../data/se2014task06/tabsa-rest/dev.pkl', 'training file')
     #tf.app.flags.DEFINE_string('test_file_path', '../../../data/se2014task06/tabsa-rest/test.pkl', 'training file')
-    tf.app.flags.DEFINE_string('train_file_path', '../../../data/se2014task06/tabsa-lapt/train.pkl', 'training file')
-    tf.app.flags.DEFINE_string('unlabel_file_path', '../../../data/se2014task06/tabsa-lapt/unlabel.clean.pkl', 'training file')
-    tf.app.flags.DEFINE_string('validate_file_path', '../../../data/se2014task06/tabsa-lapt/dev.pkl', 'training file')
-    tf.app.flags.DEFINE_string('test_file_path', '../../../data/se2014task06/tabsa-lapt/test.pkl', 'training file')
+    tf.app.flags.DEFINE_string('train_file_path', '../../../data/se2014task06/tabsa-rest/train.pkl', 'training file')
+    tf.app.flags.DEFINE_string('unlabel_file_path', '../../../data/se2014task06/tabsa-rest/unlabel.clean.pkl', 'training file')
+    tf.app.flags.DEFINE_string('validate_file_path', '../../../data/se2014task06/tabsa-rest/dev.pkl', 'training file')
+    tf.app.flags.DEFINE_string('test_file_path', '../../../data/se2014task06/tabsa-rest/test.pkl', 'training file')
     tf.app.flags.DEFINE_string('classifier_type', 'MEM', 'model type: ''(default), TD or TC')
     tf.app.flags.DEFINE_float('keep_rate', 0.5, 'keep rate')
     tf.app.flags.DEFINE_string('decoder_type', 'lstm', '[sclstm, lstm]')

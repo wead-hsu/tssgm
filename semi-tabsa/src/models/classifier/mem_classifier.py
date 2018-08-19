@@ -115,7 +115,7 @@ def load_data(data_dir):
 
 
 class MEMClassifier(BaseModel):
-    def __init__(self, nwords, word2idx, target2idx, init_hid, init_std, init_lr, batch_size,  nhop, edim, mem_size, lindim, max_grad_norm, pad_idx, pre_trained_context_wt, pre_trained_target_wt):
+    def __init__(self, nwords, word2idx, target2idx, init_hid, init_std, init_lr, batch_size,  nhop, edim, mem_size, lindim, max_grad_norm, pad_idx, pre_trained_context_wt, pre_trained_target_wt, n_class):
 
         super(MEMClassifier, self).__init__()
 
@@ -134,6 +134,7 @@ class MEMClassifier(BaseModel):
         self.word2idx = word2idx
         self.target2idx = target2idx
         self.init_lr = init_lr
+        self.n_class = n_class
 
 
         self.hid = []
@@ -150,7 +151,8 @@ class MEMClassifier(BaseModel):
 
     def build_memory(self, mem_inputs):
       self.global_step = tf.Variable(0, name="global_step", trainable=False)
-
+      
+      batch_size = tf.shape(mem_inputs['input'])[0]
       self.input = mem_inputs['input']
       self.context = mem_inputs['context']
       self.mask = mem_inputs['mask']
@@ -187,10 +189,10 @@ class MEMClassifier(BaseModel):
         self.til_hid = tf.tile(self.hid[-1], [1, self.mem_size])
         self.til_hid3dim = tf.reshape(self.til_hid, [-1, self.mem_size, self.edim])
         self.a_til_concat = tf.concat(axis=2, values=[self.til_hid3dim, self.Ain])
-        self.til_bl_wt = tf.tile(self.BL_W, [self.batch_size, 1])
-        self.til_bl_3dim = tf.reshape(self.til_bl_wt, [self.batch_size,  2 * self.edim, -1])
+        self.til_bl_wt = tf.tile(self.BL_W, [batch_size, 1])
+        self.til_bl_3dim = tf.reshape(self.til_bl_wt, [batch_size,  2 * self.edim, -1])
         self.att = tf.matmul(self.a_til_concat, self.til_bl_3dim)
-        self.til_bl_b = tf.tile(self.BL_B, [self.batch_size, self.mem_size])
+        self.til_bl_b = tf.tile(self.BL_B, [batch_size, self.mem_size])
         self.til_bl_3dim = tf.reshape(self.til_bl_b, [-1, self.mem_size, 1])
         self.g = tf.nn.tanh(tf.add(self.att, self.til_bl_3dim))
         self.g_2dim = tf.reshape(self.g, [-1, self.mem_size])
@@ -200,10 +202,10 @@ class MEMClassifier(BaseModel):
 
 
         self.Aout = tf.matmul(self.probs3dim, self.Ain)
-        self.Aout2dim = tf.reshape(self.Aout, [self.batch_size, self.edim])
+        self.Aout2dim = tf.reshape(self.Aout, [batch_size, self.edim])
 
         Cout = tf.matmul(self.hid[-1], self.C)
-        til_C_B = tf.tile(self.C_B, [self.batch_size, 1])
+        til_C_B = tf.tile(self.C_B, [batch_size, 1])
         Cout_add = tf.add(Cout, til_C_B)
         self.Dout = tf.add(Cout_add, self.Aout2dim)
 
@@ -212,8 +214,8 @@ class MEMClassifier(BaseModel):
         elif self.lindim == 0:
             self.hid.append(tf.nn.relu(self.Dout))
         else:
-            F = tf.slice(self.Dout, [0, 0], [self.batch_size, self.lindim])
-            G = tf.slice(self.Dout, [0, self.lindim], [self.batch_size, self.edim-self.lindim])
+            F = tf.slice(self.Dout, [0, 0], [batch_size, self.lindim])
+            G = tf.slice(self.Dout, [0, self.lindim], [batch_size, self.edim-self.lindim])
             K = tf.nn.relu(G)
             self.hid.append(tf.concat(axis=1, values=[F, K]))
 
@@ -221,14 +223,14 @@ class MEMClassifier(BaseModel):
         with tf.name_scope('inputs'):
             plhs = dict()
             if tag == 'xa':
-                plhs['input'] = tf.placeholder(tf.int32, [self.batch_size, 1], name="input")
+                plhs['input'] = tf.placeholder(tf.int32, [None, 1], name="input")
                 plhs['time'] = tf.placeholder(tf.int32, [None, self.mem_size], name="time")
-                #plhs['target'] = tf.placeholder(tf.int64, [self.batch_size], name="target")
-                plhs["context"] = tf.placeholder(tf.int32, [self.batch_size, self.mem_size], name="context")
-                plhs["mask"] = tf.placeholder(tf.float32, [self.batch_size, self.mem_size], name="mask")
-                #plhs["neg_inf"] = tf.fill([self.batch_size, self.mem_size], -1*np.inf, name="neg_inf")
+                #plhs['target'] = tf.placeholder(tf.int64, [None], name="target")
+                plhs["context"] = tf.placeholder(tf.int32, [None, self.mem_size], name="context")
+                plhs["mask"] = tf.placeholder(tf.float32, [None, self.mem_size], name="mask")
+                #plhs["neg_inf"] = tf.fill([None, self.mem_size], -1*np.inf, name="neg_inf")
             elif tag == 'y':
-                plhs['y'] = tf.placeholder(tf.int64, [self.batch_size], name="y")
+                plhs['y'] = tf.placeholder(tf.int64, [None], name="y")
             elif tag == 'hyper':
                 plhs['keep_rate'] = tf.placeholder(tf.float32, [], name='keep_rate')
             else:
@@ -238,7 +240,7 @@ class MEMClassifier(BaseModel):
     def forward(self, mem_inputs, hyper_inputs):
         with tf.name_scope('forward'):
             self.build_memory(mem_inputs)
-            self.W = tf.get_variable("W", [self.edim, 3], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
+            self.W = tf.get_variable("W", [self.edim, self.n_class], initializer=tf.random_uniform_initializer(minval=-0.01, maxval=0.01))
             self.logits = tf.matmul(self.hid[-1], self.W)
         return self.logits
 
@@ -365,12 +367,12 @@ class MEMClassifier(BaseModel):
         sentence_len = self.mem_size
         sent_word2idx = self.word2idx
         target_word2idx = self.target2idx
-        x = np.ndarray([self.batch_size, 1], dtype=np.int32)
-        #x = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
-        time = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
-        y = np.zeros([self.batch_size], dtype=np.int32) 
-        context = np.ndarray([self.batch_size, self.mem_size], dtype=np.int32)
-        mask = np.ndarray([self.batch_size, self.mem_size])
+        x = np.ndarray([len(samples), 1], dtype=np.int32)
+        #x = np.ndarray([len(samples), self.mem_size], dtype=np.int32)
+        time = np.ndarray([len(samples), self.mem_size], dtype=np.int32)
+        y = np.zeros([len(samples)], dtype=np.int32) 
+        context = np.ndarray([len(samples), self.mem_size], dtype=np.int32)
+        mask = np.ndarray([len(samples), self.mem_size])
         
         context.fill(self.pad_idx)
         time.fill(self.mem_size)
@@ -461,14 +463,14 @@ class MEMClassifier(BaseModel):
     
 def main(_):
     from src.io.batch_iterator import BatchIterator
-    train = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/train.pkl', 'rb'), encoding='latin')
-    test = pkl.load(open('../../../../data/se2014task06/tabsa-lapt/test.pkl', 'rb'), encoding='latin')
+    train = pkl.load(open('../../../../data/se2014task06/tabsa-rest/train.pkl', 'rb'), encoding='latin')
+    test = pkl.load(open('../../../../data/se2014task06/tabsa-rest/test.pkl', 'rb'), encoding='latin')
     
-    fns = ['../../../../data/se2014task06/tabsa-lapt/train.pkl',
-            '../../../../data/se2014task06/tabsa-lapt/dev.pkl',
-            '../../../../data/se2014task06/tabsa-lapt/test.pkl',]
+    fns = ['../../../../data/se2014task06/tabsa-rest/train.pkl',
+            '../../../../data/se2014task06/tabsa-rest/dev.pkl',
+            '../../../../data/se2014task06/tabsa-rest/test.pkl',]
 
-    data_dir = '../unlabel_lapt_10k'
+    data_dir = 'tmp'
     #data_dir = '/Users/wdxu//workspace/absa/TD-LSTM/data/restaurant/for_absa/'
     word2idx, target2idx, word_embedding, target_embedding = preprocess_data(fns, '../../../../data/glove.6B/glove.6B.300d.txt', data_dir)
     word_embedding = np.concatenate([word_embedding, np.zeros([1, FLAGS.embedding_dim])])
@@ -496,7 +498,8 @@ def main(_):
                   max_grad_norm=100,
                   pad_idx=len(word2idx),
                   pre_trained_context_wt=word_embedding,
-                  pre_trained_target_wt=target_embedding)
+                  pre_trained_target_wt=target_embedding,
+                  n_class = 3,)
         logger.info(model)            
         model.run(sess, train_it, test_it, FLAGS.n_iter, FLAGS.keep_rate, data_dir)
     #    logger.info(model)            
